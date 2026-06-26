@@ -32,7 +32,7 @@ type Handlers struct {
 	ESign        *handler.ESignHandler
 }
 
-func New(jwtSecret string, pool *pgxpool.Pool, h Handlers) http.Handler {
+func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) http.Handler {
 	r := chi.NewRouter()
 
 	// ── Global middleware ────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers) http.Handler {
 
 	// ── Protected API routes ─────────────────────────────────────────────────
 	r.Route("/api", func(r chi.Router) {
-		r.Use(auth.Middleware(jwtSecret, pool))
+		r.Use(auth.Middleware(jwtSecret, pool, supabaseURL))
 
 		// ── CRM — Clients + Jobs (funnel) — ADMIN ONLY ───────────────────────
 		// Per org policy, only the 3 board Admins can see the Job Funnel,

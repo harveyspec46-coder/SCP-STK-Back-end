@@ -67,7 +67,7 @@ func main() {
 	}
 
 	// ── Router ───────────────────────────────────────────────────────────────
-	httpHandler := router.New(cfg.SupabaseJWTSecret, pool, handlers)
+	httpHandler := router.New(cfg.SupabaseJWTSecret, pool, handlers, cfg.SupabaseURL)
 
 	// ── HTTP server ──────────────────────────────────────────────────────────
 	server := &http.Server{

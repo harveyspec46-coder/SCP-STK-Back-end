@@ -2,8 +2,16 @@ package auth
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"math/big"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -13,31 +21,91 @@ type contextKey string
 
 const UserKey contextKey = "user"
 
-// Claims mirrors Supabase JWT structure. We only use it to verify the
-// signature and read the subject (user id) + email — role/office/display_id
-// are looked up live from Postgres on every request (see Middleware below),
-// not trusted from app_metadata, so role changes (like a new admin_allowlist
-// signup) take effect immediately without waiting on a token refresh.
 type Claims struct {
 	jwt.RegisteredClaims
 	Email string `json:"email"`
 }
 
-// UserInfo is stored in request context after JWT validation + DB lookup.
 type UserInfo struct {
 	ID        string
 	Email     string
-	Role      string // admin | manager | staff — read live from users.role
-	Office    string // north | south
-	DisplayID string // ADM-001 / MGR-003 / STF-007 — empty if not yet assigned
+	Role      string
+	Office    string
+	DisplayID string
 }
 
-// Middleware validates the Supabase JWT signature, then looks up the
-// current role/office/display_id from the users table. This is the layer
-// that makes admin_allowlist recognition immediate: the moment the Postgres
-// trigger sets role='admin' for an allowlisted signup, every subsequent
-// request from that user is treated as admin — no re-login required.
-func Middleware(jwtSecret string, db *pgxpool.Pool) func(http.Handler) http.Handler {
+// jwksCache caches the public keys from Supabase JWKS endpoint
+var (
+	jwksCache    map[string]*ecdsa.PublicKey
+	jwksCacheMu  sync.RWMutex
+	jwksCachedAt time.Time
+)
+
+func getECDSAPublicKey(supabaseURL string, kid string) (*ecdsa.PublicKey, error) {
+	// Check cache first (cache for 1 hour)
+	jwksCacheMu.RLock()
+	if jwksCache != nil && time.Since(jwksCachedAt) < time.Hour {
+		if key, ok := jwksCache[kid]; ok {
+			jwksCacheMu.RUnlock()
+			return key, nil
+		}
+	}
+	jwksCacheMu.RUnlock()
+
+	// Fetch fresh JWKS
+	resp, err := http.Get(supabaseURL + "/auth/v1/.well-known/jwks.json")
+	if err != nil {
+		return nil, fmt.Errorf("failed to fetch JWKS: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var jwks struct {
+		Keys []struct {
+			Kid string `json:"kid"`
+			Kty string `json:"kty"`
+			Crv string `json:"crv"`
+			X   string `json:"x"`
+			Y   string `json:"y"`
+		} `json:"keys"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&jwks); err != nil {
+		return nil, fmt.Errorf("failed to decode JWKS: %w", err)
+	}
+
+	// Build cache
+	newCache := make(map[string]*ecdsa.PublicKey)
+	for _, k := range jwks.Keys {
+		if k.Kty != "EC" {
+			continue
+		}
+		xBytes, err := base64.RawURLEncoding.DecodeString(k.X)
+		if err != nil {
+			continue
+		}
+		yBytes, err := base64.RawURLEncoding.DecodeString(k.Y)
+		if err != nil {
+			continue
+		}
+		pubKey := &ecdsa.PublicKey{
+			Curve: elliptic.P256(),
+			X:     new(big.Int).SetBytes(xBytes),
+			Y:     new(big.Int).SetBytes(yBytes),
+		}
+		newCache[k.Kid] = pubKey
+	}
+
+	jwksCacheMu.Lock()
+	jwksCache = newCache
+	jwksCachedAt = time.Now()
+	jwksCacheMu.Unlock()
+
+	if key, ok := newCache[kid]; ok {
+		return key, nil
+	}
+	return nil, fmt.Errorf("key with kid %q not found in JWKS", kid)
+}
+
+func Middleware(jwtSecret string, db *pgxpool.Pool, supabaseURL string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
@@ -56,10 +124,17 @@ func Middleware(jwtSecret string, db *pgxpool.Pool) func(http.Handler) http.Hand
 			claims := &Claims{}
 
 			token, err := jwt.ParseWithClaims(tokenStr, claims, func(t *jwt.Token) (interface{}, error) {
-				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, jwt.ErrSignatureInvalid
+				switch t.Method.(type) {
+				case *jwt.SigningMethodHMAC:
+					// Legacy HS256
+					return []byte(jwtSecret), nil
+				case *jwt.SigningMethodECDSA:
+					// New ECC P-256 — fetch public key from JWKS
+					kid, _ := t.Header["kid"].(string)
+					return getECDSAPublicKey(supabaseURL, kid)
+				default:
+					return nil, fmt.Errorf("unexpected signing method: %v", t.Header["alg"])
 				}
-				return []byte(jwtSecret), nil
 			})
 
 			if err != nil || !token.Valid {
@@ -70,10 +145,9 @@ func Middleware(jwtSecret string, db *pgxpool.Pool) func(http.Handler) http.Hand
 			user := &UserInfo{
 				ID:    claims.Subject,
 				Email: claims.Email,
-				Role:  "staff", // fail safe to least privilege if the lookup below misses
+				Role:  "staff",
 			}
 
-			// Live lookup — source of truth is the users table, never a cached claim.
 			var displayID *string
 			row := db.QueryRow(r.Context(),
 				`SELECT role, office, display_id FROM users WHERE id = $1`, claims.Subject)
@@ -87,14 +161,11 @@ func Middleware(jwtSecret string, db *pgxpool.Pool) func(http.Handler) http.Hand
 	}
 }
 
-// GetUser retrieves UserInfo from context. Panics if middleware was not applied.
 func GetUser(ctx context.Context) *UserInfo {
 	u, _ := ctx.Value(UserKey).(*UserInfo)
 	return u
 }
 
-// RequireRole returns a middleware that enforces minimum role level.
-// Role hierarchy: admin > manager > staff
 func RequireRole(minRole string) func(http.Handler) http.Handler {
 	rank := map[string]int{"staff": 1, "manager": 2, "admin": 3}
 	return func(next http.Handler) http.Handler {
@@ -113,9 +184,6 @@ func RequireRole(minRole string) func(http.Handler) http.Handler {
 	}
 }
 
-// RequireExactRole restricts a route to one specific role only (e.g. the
-// "only 3 admins can see Finance & the Job Funnel" rule — a manager, even
-// though they outrank staff, must NOT pass this check).
 func RequireExactRole(role string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
