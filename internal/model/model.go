@@ -272,11 +272,20 @@ type Resolution struct {
 	OpensAt      time.Time   `json:"opens_at"`
 	ClosesAt     time.Time   `json:"closes_at"`
 	Status       string      `json:"status"` // open | closed | passed | failed
+	DocumentURL  string      `json:"document_url,omitempty"`
 	YesCount     int         `json:"yes_count"`
 	NoCount      int         `json:"no_count"`
 	AbstainCount int         `json:"abstain_count"`
 	MyVote       *VoteChoice `json:"my_vote,omitempty"`
 	CreatedAt    time.Time   `json:"created_at"`
+}
+
+type VoterStatus struct {
+	UserID    string  `json:"user_id"`
+	FullName  string  `json:"full_name"`
+	DisplayID *string `json:"display_id"`
+	Voted     bool    `json:"voted"`
+	Choice    *string `json:"choice,omitempty"`
 }
 
 type CastVoteRequest struct {

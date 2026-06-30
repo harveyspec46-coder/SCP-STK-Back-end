@@ -127,6 +127,7 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 			r.Get("/", h.Voting.List)
 			r.With(auth.RequireRole("manager")).Post("/", h.Voting.Create)
 			r.Post("/{id}/vote", h.Voting.CastVote)
+			r.Get("/{id}/voters", h.Voting.Voters)
 		})
 
 		// ── Notifications ─────────────────────────────────────────────────────

@@ -317,6 +317,16 @@ func (h *VotingHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, model.Response{Data: created})
 }
 
+func (h *VotingHandler) Voters(w http.ResponseWriter, r *http.Request) {
+	resID := chi.URLParam(r, "id")
+	voters, err := h.repo.VotersForResolution(r.Context(), resID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load voters")
+		return
+	}
+	writeJSON(w, http.StatusOK, model.Response{Data: voters, Total: len(voters)})
+}
+
 func (h *VotingHandler) CastVote(w http.ResponseWriter, r *http.Request) {
 	resID := chi.URLParam(r, "id")
 	var req model.CastVoteRequest

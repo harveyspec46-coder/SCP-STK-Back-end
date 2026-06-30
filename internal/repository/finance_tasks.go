@@ -343,6 +343,7 @@ func NewVotingRepo(db *pgxpool.Pool) *VotingRepo {
 func (r *VotingRepo) List(ctx context.Context) ([]model.Resolution, error) {
 	query := `
 		SELECT r.id, r.title, r.body, r.proposed_by, r.opens_at, r.closes_at, r.status, r.created_at,
+		       COALESCE(r.document_url,''),
 		       u.full_name,
 		       COUNT(v.id) FILTER (WHERE v.choice='yes')     AS yes_count,
 		       COUNT(v.id) FILTER (WHERE v.choice='no')      AS no_count,
@@ -363,7 +364,7 @@ func (r *VotingRepo) List(ctx context.Context) ([]model.Resolution, error) {
 		resolution.Proposer = &model.User{}
 		rows.Scan(&resolution.ID, &resolution.Title, &resolution.Body,
 			&resolution.ProposedBy, &resolution.OpensAt, &resolution.ClosesAt, &resolution.Status,
-			&resolution.CreatedAt, &resolution.Proposer.FullName,
+			&resolution.CreatedAt, &resolution.DocumentURL, &resolution.Proposer.FullName,
 			&resolution.YesCount, &resolution.NoCount, &resolution.AbstainCount)
 		resolution.Proposer.ID = resolution.ProposedBy
 		res = append(res, resolution)
@@ -371,16 +372,45 @@ func (r *VotingRepo) List(ctx context.Context) ([]model.Resolution, error) {
 	return res, nil
 }
 
+// VotersForResolution returns every board member (admin/manager) and whether
+// they have voted on this resolution yet, with their display_id for tracking.
+func (r *VotingRepo) VotersForResolution(ctx context.Context, resolutionID string) ([]model.VoterStatus, error) {
+	query := `
+		SELECT u.id, u.full_name, u.display_id,
+		       v.id IS NOT NULL AS voted,
+		       v.choice
+		FROM users u
+		LEFT JOIN votes v ON v.user_id = u.id AND v.resolution_id = $1
+		WHERE u.role IN ('admin','manager')
+		ORDER BY u.full_name`
+	rows, err := r.db.Query(ctx, query, resolutionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.VoterStatus
+	for rows.Next() {
+		var v model.VoterStatus
+		var choice *string
+		if err := rows.Scan(&v.UserID, &v.FullName, &v.DisplayID, &v.Voted, &choice); err != nil {
+			continue
+		}
+		v.Choice = choice
+		out = append(out, v)
+	}
+	return out, nil
+}
+
 func (r *VotingRepo) Create(ctx context.Context, res model.Resolution) (*model.Resolution, error) {
 	res.ID = uuid.New().String()
 	query := `
-		INSERT INTO resolutions (id, title, body, proposed_by, opens_at, closes_at, status)
-		VALUES ($1,$2,$3,$4,$5,$6,'open')
-		RETURNING id, title, body, proposed_by, opens_at, closes_at, status, created_at`
+		INSERT INTO resolutions (id, title, body, proposed_by, opens_at, closes_at, status, document_url)
+		VALUES ($1,$2,$3,$4,$5,$6,'open',$7)
+		RETURNING id, title, body, proposed_by, opens_at, closes_at, status, created_at, COALESCE(document_url,'')`
 	err := r.db.QueryRow(ctx, query, res.ID, res.Title, res.Body,
-		res.ProposedBy, res.OpensAt, res.ClosesAt).
+		res.ProposedBy, res.OpensAt, res.ClosesAt, res.DocumentURL).
 		Scan(&res.ID, &res.Title, &res.Body, &res.ProposedBy,
-			&res.OpensAt, &res.ClosesAt, &res.Status, &res.CreatedAt)
+			&res.OpensAt, &res.ClosesAt, &res.Status, &res.CreatedAt, &res.DocumentURL)
 	if err != nil {
 		return nil, err
 	}
