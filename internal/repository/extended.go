@@ -69,9 +69,11 @@ func (r *AdminRepo) RemoveFromAllowlist(ctx context.Context, email string) error
 // Users & IDs panel (replaces the frontend's local-only mock state).
 func (r *AdminRepo) ListUsers(ctx context.Context) ([]model.User, error) {
 	rows, err := r.db.Query(ctx,
-		`SELECT id, full_name, role, office, COALESCE(phone,''),
-		        COALESCE(display_id,''), active, created_at
-		 FROM users ORDER BY created_at`)
+		`SELECT u.id, u.full_name, u.role, u.office, COALESCE(u.phone,''),
+				COALESCE(u.display_id,''), u.active, u.created_at,
+				COALESCE(a.email,'')
+			 FROM users u
+			 LEFT JOIN auth.users a ON a.id = u.id
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
@@ -80,7 +82,7 @@ func (r *AdminRepo) ListUsers(ctx context.Context) ([]model.User, error) {
 	for rows.Next() {
 		var u model.User
 		if err := rows.Scan(&u.ID, &u.FullName, &u.Role, &u.Office, &u.Phone,
-			&u.DisplayID, &u.Active, &u.CreatedAt); err != nil {
+			&u.DisplayID, &u.Active, &u.CreatedAt, &u.Email); err != nil {
 			return nil, err
 		}
 		out = append(out, u)
