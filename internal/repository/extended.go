@@ -74,6 +74,7 @@ func (r *AdminRepo) ListUsers(ctx context.Context) ([]model.User, error) {
 				COALESCE(a.email,'')
 			 FROM users u
 			 LEFT JOIN auth.users a ON a.id = u.id
+			 ORDER BY u.created_at`)
 	if err != nil {
 		return nil, fmt.Errorf("list users: %w", err)
 	}
