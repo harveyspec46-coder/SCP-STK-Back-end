@@ -92,8 +92,11 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 		// to read+complete tasks assigned to them via My Tasks) ──────────────
 		r.Route("/tasks", func(r chi.Router) {
 			r.Get("/", h.Tasks.List)
-			r.Post("/", h.Tasks.Create)
+			r.With(auth.RequireExactRole("admin")).
+				Post("/", h.Tasks.Create)
 			r.Patch("/{id}/status", h.Tasks.UpdateStatus)
+			r.Post("/{id}/notify-ready", h.Tasks.NotifyReady)
+			r.Post("/{id}/attachments", h.Tasks.AddAttachment)
 			r.With(auth.RequireRole("manager")).
 				Delete("/{id}", h.Tasks.Delete)
 			r.Get("/productivity", h.Tasks.Productivity)

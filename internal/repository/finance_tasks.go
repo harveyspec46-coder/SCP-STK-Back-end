@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,6 +12,10 @@ import (
 )
 
 // ─── Tasks ────────────────────────────────────────────────────────────────────
+
+// ErrInvalidAssignee is returned when a task is assigned to someone who is
+// not an admin or manager — board tasks are admin/manager only.
+var ErrInvalidAssignee = errors.New("tasks can only be assigned to admins or managers")
 
 type TaskRepo struct {
 	db *pgxpool.Pool
@@ -23,7 +28,7 @@ func NewTaskRepo(db *pgxpool.Pool) *TaskRepo {
 func (r *TaskRepo) ListForUser(ctx context.Context, userID string) ([]model.Task, error) {
 	query := `
 		SELECT t.id, t.job_id, t.assigned_to, t.title, t.description,
-		       t.status, t.due_at, t.created_by, t.created_at,
+		       t.status, t.priority, t.ready_for_review, t.due_at, t.created_by, t.created_at,
 		       u.full_name, u.role
 		FROM tasks t
 		JOIN users u ON u.id = t.assigned_to
@@ -36,13 +41,17 @@ func (r *TaskRepo) ListForUser(ctx context.Context, userID string) ([]model.Task
 		return nil, err
 	}
 	defer rows.Close()
-	return scanTasks(rows)
+	tasks, err := scanTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	return r.attachAttachments(ctx, tasks)
 }
 
 func (r *TaskRepo) ListAll(ctx context.Context) ([]model.Task, error) {
 	query := `
 		SELECT t.id, t.job_id, t.assigned_to, t.title, t.description,
-		       t.status, t.due_at, t.created_by, t.created_at,
+		       t.status, t.priority, t.ready_for_review, t.due_at, t.created_by, t.created_at,
 		       u.full_name, u.role
 		FROM tasks t
 		JOIN users u ON u.id = t.assigned_to
@@ -52,7 +61,11 @@ func (r *TaskRepo) ListAll(ctx context.Context) ([]model.Task, error) {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanTasks(rows)
+	tasks, err := scanTasks(rows)
+	if err != nil {
+		return nil, err
+	}
+	return r.attachAttachments(ctx, tasks)
 }
 
 func scanTasks(rows interface {
@@ -64,7 +77,7 @@ func scanTasks(rows interface {
 		var t model.Task
 		t.Assignee = &model.User{}
 		if err := rows.Scan(&t.ID, &t.JobID, &t.AssignedTo, &t.Title,
-			&t.Description, &t.Status, &t.DueAt, &t.CreatedBy, &t.CreatedAt,
+			&t.Description, &t.Status, &t.Priority, &t.ReadyForReview, &t.DueAt, &t.CreatedBy, &t.CreatedAt,
 			&t.Assignee.FullName, &t.Assignee.Role); err != nil {
 			return nil, err
 		}
@@ -74,17 +87,108 @@ func scanTasks(rows interface {
 	return tasks, nil
 }
 
+// attachAttachments batch-loads every file attached to the given tasks and
+// fills in each task's Attachments field. One query regardless of task count.
+func (r *TaskRepo) attachAttachments(ctx context.Context, tasks []model.Task) ([]model.Task, error) {
+	if len(tasks) == 0 {
+		return tasks, nil
+	}
+	ids := make([]string, len(tasks))
+	for i, t := range tasks {
+		ids[i] = t.ID
+	}
+	byTask, err := r.AttachmentsForTasks(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for i := range tasks {
+		tasks[i].Attachments = byTask[tasks[i].ID]
+	}
+	return tasks, nil
+}
+
+// AttachmentsForTasks batch-loads files for a set of task ids, grouped by task.
+func (r *TaskRepo) AttachmentsForTasks(ctx context.Context, taskIDs []string) (map[string][]model.TaskAttachment, error) {
+	out := map[string][]model.TaskAttachment{}
+	if len(taskIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.db.Query(ctx, `
+		SELECT id, task_id, uploaded_by, file_url, file_name, created_at
+		FROM task_attachments
+		WHERE task_id = ANY($1)
+		ORDER BY created_at ASC`, taskIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var a model.TaskAttachment
+		if err := rows.Scan(&a.ID, &a.TaskID, &a.UploadedBy, &a.FileURL, &a.FileName, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out[a.TaskID] = append(out[a.TaskID], a)
+	}
+	return out, nil
+}
+
+// AddAttachment records a file already uploaded to Storage (client uploads
+// first, then posts the resulting URL here). Either the assigner or the
+// assignee may add attachments — that check happens in the handler.
+func (r *TaskRepo) AddAttachment(ctx context.Context, taskID, uploadedBy, fileURL, fileName string) (*model.TaskAttachment, error) {
+	id := uuid.New().String()
+	var a model.TaskAttachment
+	err := r.db.QueryRow(ctx, `
+		INSERT INTO task_attachments (id, task_id, uploaded_by, file_url, file_name)
+		VALUES ($1,$2,$3,$4,$5)
+		RETURNING id, task_id, uploaded_by, file_url, file_name, created_at`,
+		id, taskID, uploadedBy, fileURL, fileName).
+		Scan(&a.ID, &a.TaskID, &a.UploadedBy, &a.FileURL, &a.FileName, &a.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("add attachment: %w", err)
+	}
+	return &a, nil
+}
+
+// GetByID fetches a single task — used by the handler to check who's allowed
+// to move it to the next status before calling UpdateStatus.
+func (r *TaskRepo) GetByID(ctx context.Context, id string) (*model.Task, error) {
+	var t model.Task
+	err := r.db.QueryRow(ctx, `
+		SELECT id, job_id, assigned_to, title, description, status, priority,
+		       ready_for_review, due_at, created_by, created_at
+		FROM tasks WHERE id=$1`, id).
+		Scan(&t.ID, &t.JobID, &t.AssignedTo, &t.Title, &t.Description, &t.Status,
+			&t.Priority, &t.ReadyForReview, &t.DueAt, &t.CreatedBy, &t.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
 func (r *TaskRepo) Create(ctx context.Context, req model.CreateTaskRequest, createdBy string) (*model.Task, error) {
+	var assigneeRole string
+	if err := r.db.QueryRow(ctx, `SELECT role FROM users WHERE id=$1`, req.AssignedTo).
+		Scan(&assigneeRole); err != nil {
+		return nil, fmt.Errorf("assignee not found: %w", err)
+	}
+	if assigneeRole != "admin" && assigneeRole != "manager" {
+		return nil, ErrInvalidAssignee
+	}
+	priority := req.Priority
+	if priority == "" {
+		priority = "normal"
+	}
 	id := uuid.New().String()
 	query := `
-		INSERT INTO tasks (id, job_id, assigned_to, title, description, status, due_at, created_by)
-		VALUES ($1,$2,$3,$4,$5,'open',$6,$7)
-		RETURNING id, job_id, assigned_to, title, description, status, due_at, created_by, created_at`
+		INSERT INTO tasks (id, job_id, assigned_to, title, description, status, priority, due_at, created_by)
+		VALUES ($1,$2,$3,$4,$5,'open',$6,$7,$8)
+		RETURNING id, job_id, assigned_to, title, description, status, priority, ready_for_review, due_at, created_by, created_at`
 	var t model.Task
 	err := r.db.QueryRow(ctx, query, id, req.JobID, req.AssignedTo,
-		req.Title, req.Description, req.DueAt, createdBy).
+		req.Title, req.Description, priority, req.DueAt, createdBy).
 		Scan(&t.ID, &t.JobID, &t.AssignedTo, &t.Title,
-			&t.Description, &t.Status, &t.DueAt, &t.CreatedBy, &t.CreatedAt)
+			&t.Description, &t.Status, &t.Priority, &t.ReadyForReview, &t.DueAt, &t.CreatedBy, &t.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("create task: %w", err)
 	}
@@ -92,7 +196,14 @@ func (r *TaskRepo) Create(ctx context.Context, req model.CreateTaskRequest, crea
 }
 
 func (r *TaskRepo) UpdateStatus(ctx context.Context, id string, status model.TaskStatus) error {
-	_, err := r.db.Exec(ctx, `UPDATE tasks SET status=$1 WHERE id=$2`, status, id)
+	_, err := r.db.Exec(ctx, `UPDATE tasks SET status=$1, ready_for_review=false WHERE id=$2`, status, id)
+	return err
+}
+
+// SetReadyForReview flags a task as ready without changing its status —
+// used when the assignee wants to notify the assigner without completing it.
+func (r *TaskRepo) SetReadyForReview(ctx context.Context, id string) error {
+	_, err := r.db.Exec(ctx, `UPDATE tasks SET ready_for_review=true WHERE id=$1`, id)
 	return err
 }
 

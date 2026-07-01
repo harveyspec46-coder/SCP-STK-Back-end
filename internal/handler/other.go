@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"time"
@@ -39,7 +40,7 @@ func (h *TaskHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, model.Response{Data: tasks, Total: len(tasks)})
 }
 
-// POST /api/tasks
+// POST /api/tasks — admin only (enforced by router); assignee must be admin/manager
 func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req model.CreateTaskRequest
 	if err := decode(r, &req); err != nil {
@@ -49,6 +50,10 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
 	task, err := h.repo.Create(r.Context(), req, user.ID)
 	if err != nil {
+		if errors.Is(err, repository.ErrInvalidAssignee) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "failed to create task")
 		return
 	}
@@ -59,7 +64,10 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, model.Response{Data: task})
 }
 
-// PATCH /api/tasks/:id/status
+// PATCH /api/tasks/:id/status — strict two-step handoff:
+//   open -> in_progress   only the assignee may do this
+//   in_progress -> done   only the original assigner (creator) may do this
+// Any other transition or actor is rejected.
 func (h *TaskHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var body struct {
@@ -69,11 +77,102 @@ func (h *TaskHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	user := auth.GetUser(r.Context())
+	task, err := h.repo.GetByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
+	switch {
+	case task.Status == model.TaskOpen && body.Status == model.TaskInProgress:
+		if user.ID != task.AssignedTo {
+			writeError(w, http.StatusForbidden, "only the assignee can start this task")
+			return
+		}
+	case task.Status == model.TaskInProgress && body.Status == model.TaskDone:
+		if user.ID != task.CreatedBy {
+			writeError(w, http.StatusForbidden, "only the assigner can mark this task complete")
+			return
+		}
+	default:
+		writeError(w, http.StatusBadRequest, "invalid status transition")
+		return
+	}
+
 	if err := h.repo.UpdateStatus(r.Context(), id, body.Status); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to update task")
 		return
 	}
+
+	if body.Status == model.TaskInProgress {
+		_ = h.notif.Create(r.Context(), task.CreatedBy, "task_started",
+			"Task started: "+task.Title, nil)
+	} else if body.Status == model.TaskDone {
+		_ = h.notif.Create(r.Context(), task.AssignedTo, "task_completed",
+			"Task completed: "+task.Title, nil)
+	}
+
 	writeJSON(w, http.StatusOK, model.Response{Message: "status updated"})
+}
+
+// POST /api/tasks/:id/notify-ready — assignee signals work is done and
+// notifies the assigner in real time, WITHOUT changing the status. Only the
+// assigner can actually move the task to done (via UpdateStatus).
+func (h *TaskHandler) NotifyReady(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	user := auth.GetUser(r.Context())
+	task, err := h.repo.GetByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if user.ID != task.AssignedTo {
+		writeError(w, http.StatusForbidden, "only the assignee can notify the assigner")
+		return
+	}
+	if task.Status != model.TaskInProgress {
+		writeError(w, http.StatusBadRequest, "task must be in progress to notify")
+		return
+	}
+	if err := h.repo.SetReadyForReview(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to update task")
+		return
+	}
+	_ = h.notif.Create(r.Context(), task.CreatedBy, "task_ready_for_review",
+		"Ready for review: "+task.Title, nil)
+	writeJSON(w, http.StatusOK, model.Response{Message: "assigner notified"})
+}
+
+// POST /api/tasks/:id/attachments — either the assigner or the assignee can
+// attach one or more files, at any point. The client uploads to Supabase
+// Storage first and posts the resulting URL here.
+func (h *TaskHandler) AddAttachment(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var body struct {
+		FileURL  string `json:"file_url"`
+		FileName string `json:"file_name"`
+	}
+	if err := decode(r, &body); err != nil || body.FileURL == "" {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	user := auth.GetUser(r.Context())
+	task, err := h.repo.GetByID(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+	if user.ID != task.AssignedTo && user.ID != task.CreatedBy {
+		writeError(w, http.StatusForbidden, "only the assigner or assignee can attach files to this task")
+		return
+	}
+	att, err := h.repo.AddAttachment(r.Context(), id, user.ID, body.FileURL, body.FileName)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to attach file")
+		return
+	}
+	writeJSON(w, http.StatusCreated, model.Response{Data: att})
 }
 
 // DELETE /api/tasks/:id

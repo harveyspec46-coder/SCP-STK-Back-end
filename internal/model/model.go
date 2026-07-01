@@ -155,16 +155,19 @@ type AssignStaffRequest struct {
 // ─── Task ─────────────────────────────────────────────────────────────────────
 
 type Task struct {
-	ID          string     `json:"id"`
-	JobID       *string    `json:"job_id,omitempty"`
-	AssignedTo  string     `json:"assigned_to"`
-	Assignee    *User      `json:"assignee,omitempty"`
-	Title       string     `json:"title"`
-	Description string     `json:"description,omitempty"`
-	Status      TaskStatus `json:"status"`
-	DueAt       *time.Time `json:"due_at,omitempty"`
-	CreatedBy   string     `json:"created_by"`
-	CreatedAt   time.Time  `json:"created_at"`
+	ID             string           `json:"id"`
+	JobID          *string          `json:"job_id,omitempty"`
+	AssignedTo     string           `json:"assigned_to"`
+	Assignee       *User            `json:"assignee,omitempty"`
+	Title          string           `json:"title"`
+	Description    string           `json:"description,omitempty"`
+	Status         TaskStatus       `json:"status"`
+	Priority       string           `json:"priority"`
+	ReadyForReview bool             `json:"ready_for_review"`
+	Attachments    []TaskAttachment `json:"attachments,omitempty"`
+	DueAt          *time.Time       `json:"due_at,omitempty"`
+	CreatedBy      string           `json:"created_by"`
+	CreatedAt      time.Time        `json:"created_at"`
 }
 
 type CreateTaskRequest struct {
@@ -172,7 +175,19 @@ type CreateTaskRequest struct {
 	AssignedTo  string     `json:"assigned_to"`
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
+	Priority    string     `json:"priority"`
 	DueAt       *time.Time `json:"due_at"`
+}
+
+// TaskAttachment is a single file attached to a task — either side (assigner
+// or assignee) can add one or more, at any point in the task's life.
+type TaskAttachment struct {
+	ID         string    `json:"id"`
+	TaskID     string    `json:"task_id"`
+	UploadedBy string    `json:"uploaded_by"`
+	FileURL    string    `json:"file_url"`
+	FileName   string    `json:"file_name"`
+	CreatedAt  time.Time `json:"created_at"`
 }
 
 // ─── Program ──────────────────────────────────────────────────────────────────
