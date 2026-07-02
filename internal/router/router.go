@@ -195,9 +195,10 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 			r.Get("/allowlist", h.Admin.ListAllowlist)
 			r.Post("/allowlist", h.Admin.AddAllowlistEntry)
 			r.Delete("/allowlist/{email}", h.Admin.RemoveAllowlistEntry)
-			r.Get("/users", h.Admin.ListUsers)
 			r.Patch("/users/{id}/display-id", h.Admin.AssignDisplayID)
 		})
+		// GET /api/admin/users — managers and admins (read-only, for display lookups)
+		r.With(auth.RequireRole("manager")).Get("/admin/users", h.Admin.ListUsers)
 	})
 
 	return r
