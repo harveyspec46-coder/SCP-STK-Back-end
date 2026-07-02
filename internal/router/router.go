@@ -88,6 +88,11 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 			r.Get("/crm/staff/{uid}/workload", h.CRM.StaffWorkload)
 		})
 
+		// ── My Jobs — any authenticated user (staff included); only ever
+		// exposes/acts on jobs the caller is personally assigned to ──────────
+		r.Get("/my-jobs", h.CRM.MyJobs)
+		r.Patch("/my-jobs/{id}/checkin", h.CRM.CheckIn)
+		r.Patch("/my-jobs/{id}/complete", h.CRM.CompleteMyJob)
 		// ── Tasks — board only (not in the Staff nav, but staff still need
 		// to read+complete tasks assigned to them via My Tasks) ──────────────
 		r.Route("/tasks", func(r chi.Router) {

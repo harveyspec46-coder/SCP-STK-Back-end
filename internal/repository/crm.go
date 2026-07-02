@@ -286,6 +286,87 @@ func (r *CRMRepo) RemoveAssignment(ctx context.Context, jobID, userID string) er
 	return err
 }
 
+// AdminUserIDs returns every admin's ID, used to notify the board when a
+// staff member completes a job (jobs have no single "assigner" field).
+func (r *CRMRepo) AdminUserIDs(ctx context.Context) ([]string, error) {
+	rows, err := r.db.Query(ctx, `SELECT id FROM users WHERE role = 'admin'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+// MyJobs returns a staff member's own active job assignments, with client
+// info included (name/phone/address) so the "My Jobs" card can render fully
+// without exposing the rest of the CRM (other clients, other staff, etc).
+func (r *CRMRepo) MyJobs(ctx context.Context, userID string) ([]model.Job, error) {
+	query := `
+		SELECT j.id, j.client_id, j.service_type, j.stage, j.address,
+		       j.description, j.tools_used, j.scheduled_at, j.arrived_at,
+		       j.completed_at, j.price, j.notes, j.created_at,
+		       c.full_name, c.phone, c.address
+		FROM crm_jobs j
+		JOIN crm_job_assignments a ON a.job_id = j.id
+		JOIN crm_clients c ON c.id = j.client_id
+		WHERE a.user_id = $1
+		  AND j.stage NOT IN ('completed','invoiced')
+		ORDER BY j.scheduled_at ASC NULLS LAST`
+
+	rows, err := r.db.Query(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var jobs []model.Job
+	for rows.Next() {
+		var j model.Job
+		j.Client = &model.Client{}
+		if err := rows.Scan(&j.ID, &j.ClientID, &j.ServiceType, &j.Stage,
+			&j.Address, &j.Description, &j.ToolsUsed,
+			&j.ScheduledAt, &j.ArrivedAt, &j.CompletedAt,
+			&j.Price, &j.Notes, &j.CreatedAt,
+			&j.Client.FullName, &j.Client.Phone, &j.Client.Address); err != nil {
+			return nil, err
+		}
+		j.Client.ID = j.ClientID
+		jobs = append(jobs, j)
+	}
+	return jobs, nil
+}
+
+// IsAssignedToJob checks whether a user is one of the assigned staff on a
+// job — used to guard the staff-facing check-in/complete endpoints so a
+// staff member can only act on their own jobs.
+func (r *CRMRepo) IsAssignedToJob(ctx context.Context, jobID, userID string) (bool, error) {
+	var exists bool
+	err := r.db.QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM crm_job_assignments WHERE job_id=$1 AND user_id=$2)`,
+		jobID, userID).Scan(&exists)
+	return exists, err
+}
+
+// CompleteJob marks a job completed, records actual-hours + note into the
+// notes field (no dedicated column exists yet), and sets completed_at.
+func (r *CRMRepo) CompleteJob(ctx context.Context, jobID string, notesText string) (*model.Job, error) {
+	_, err := r.db.Exec(ctx,
+		`UPDATE crm_jobs SET stage='completed', completed_at=NOW(), notes=$1 WHERE id=$2`,
+		notesText, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("complete job: %w", err)
+	}
+	return r.GetJob(ctx, jobID)
+}
+
 // StaffWorkload returns all active jobs for a given staff member.
 // This supports the "assign staff while they have concurrent jobs" requirement.
 func (r *CRMRepo) StaffWorkload(ctx context.Context, userID string) ([]model.Job, error) {

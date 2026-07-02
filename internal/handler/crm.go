@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/scp-stk/hub/internal/auth"
@@ -310,6 +311,81 @@ func (h *CRMHandler) CreateJobTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, model.Response{Data: task})
 }
 
+// ─── Staff-facing "My Jobs" endpoints ──────────────────────────────────────
+// Unlike the /crm/* routes above, these are open to ANY authenticated user
+// (staff included) but only ever expose/act on jobs that user is personally
+// assigned to — never the full client list or other staff's jobs.
+
+// GET /api/my-jobs
+func (h *CRMHandler) MyJobs(w http.ResponseWriter, r *http.Request) {
+	user := auth.GetUser(r.Context())
+	jobs, err := h.crm.MyJobs(r.Context(), user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load your jobs")
+		return
+	}
+	writeJSON(w, http.StatusOK, model.Response{Data: jobs, Total: len(jobs)})
+}
+
+// PATCH /api/my-jobs/:id/checkin — staff marks that they've arrived on site.
+func (h *CRMHandler) CheckIn(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "id")
+	user := auth.GetUser(r.Context())
+
+	assigned, err := h.crm.IsAssignedToJob(r.Context(), jobID, user.ID)
+	if err != nil || !assigned {
+		writeError(w, http.StatusForbidden, "you are not assigned to this job")
+		return
+	}
+
+	job, err := h.crm.AdvanceStage(r.Context(), jobID, model.AdvanceStageRequest{Stage: model.StageArrived})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check in")
+		return
+	}
+	writeJSON(w, http.StatusOK, model.Response{Data: job, Message: "checked in"})
+}
+
+// PATCH /api/my-jobs/:id/complete — staff marks the job done; notifies admins.
+func (h *CRMHandler) CompleteMyJob(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "id")
+	user := auth.GetUser(r.Context())
+
+	assigned, err := h.crm.IsAssignedToJob(r.Context(), jobID, user.ID)
+	if err != nil || !assigned {
+		writeError(w, http.StatusForbidden, "you are not assigned to this job")
+		return
+	}
+
+	var body struct {
+		ActualHours float64 `json:"actual_hours"`
+		Note        string  `json:"note"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	notesText := "Actual hours: " + ftoa(body.ActualHours)
+	if body.Note != "" {
+		notesText += ". " + body.Note
+	}
+
+	job, err := h.crm.CompleteJob(r.Context(), jobID, notesText)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to complete job")
+		return
+	}
+
+	adminIDs, _ := h.crm.AdminUserIDs(r.Context())
+	body2 := user.DisplayID + " completed the " + job.ServiceType + " job at " + job.Address
+	for _, aid := range adminIDs {
+		_ = h.notif.Create(r.Context(), aid, "job_completed", body2, &jobID)
+	}
+
+	writeJSON(w, http.StatusOK, model.Response{Data: job, Message: "job marked complete"})
+}
+
 // GET /api/crm/staff/:uid/workload
 func (h *CRMHandler) StaffWorkload(w http.ResponseWriter, r *http.Request) {
 	userID := chi.URLParam(r, "uid")
@@ -319,6 +395,11 @@ func (h *CRMHandler) StaffWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, model.Response{Data: jobs, Total: len(jobs)})
+}
+
+// ftoa formats a float with 1 decimal place.
+func ftoa(f float64) string {
+	return strconv.FormatFloat(f, 'f', 1, 64)
 }
 
 // itoa is a simple int-to-string helper to avoid importing strconv everywhere.
