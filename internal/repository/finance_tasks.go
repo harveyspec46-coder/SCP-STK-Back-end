@@ -212,6 +212,11 @@ func (r *TaskRepo) Delete(ctx context.Context, id string) error {
 	return err
 }
 
+func (r *TaskRepo) GetFullName(ctx context.Context, id string) (string, error) {
+	var name string
+	err := r.db.QueryRow(ctx, `SELECT full_name FROM users WHERE id=$1`, id).Scan(&name)
+	return name, err
+}
 // ProductivityScore returns completed/total ratio for a user in a given period.
 func (r *TaskRepo) ProductivityScore(ctx context.Context, userID, period string) (float64, int, int, error) {
 	query := `

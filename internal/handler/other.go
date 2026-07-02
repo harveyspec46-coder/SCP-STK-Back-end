@@ -58,8 +58,9 @@ func (h *TaskHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if req.AssignedTo != user.ID {
+		assignerName, _ := h.repo.GetFullName(r.Context(), user.ID)
 		_ = h.notif.Create(r.Context(), req.AssignedTo, "task_assigned",
-			"New task assigned: "+req.Title, nil)
+			assignerName+" has assigned you a task: "+req.Title, &task.ID)
 	}
 	writeJSON(w, http.StatusCreated, model.Response{Data: task})
 }
@@ -106,11 +107,13 @@ func (h *TaskHandler) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if body.Status == model.TaskInProgress {
+		actorName, _ := h.repo.GetFullName(r.Context(), user.ID)
 		_ = h.notif.Create(r.Context(), task.CreatedBy, "task_started",
-			"Task started: "+task.Title, nil)
+			actorName+" has started working on: "+task.Title, &id)
 	} else if body.Status == model.TaskDone {
+		actorName, _ := h.repo.GetFullName(r.Context(), user.ID)
 		_ = h.notif.Create(r.Context(), task.AssignedTo, "task_completed",
-			"Task completed: "+task.Title, nil)
+			actorName+" has marked your task as done: "+task.Title, &id)
 	}
 
 	writeJSON(w, http.StatusOK, model.Response{Message: "status updated"})
@@ -139,8 +142,9 @@ func (h *TaskHandler) NotifyReady(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to update task")
 		return
 	}
+	assigneeName, _ := h.repo.GetFullName(r.Context(), user.ID)
 	_ = h.notif.Create(r.Context(), task.CreatedBy, "task_ready_for_review",
-		"Ready for review: "+task.Title, nil)
+		assigneeName+" has completed their assigned task: "+task.Title, &id)
 	writeJSON(w, http.StatusOK, model.Response{Message: "assigner notified"})
 }
 
