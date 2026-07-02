@@ -446,6 +446,59 @@ func (r *GrantRepo) Assign(ctx context.Context, id, userID string) error {
 	return err
 }
 
+// DueForDeadlineAlert returns grants in "incoming" or "in_progress" stage
+// whose deadline is within the next 72 hours (including already-overdue
+// ones that haven't been notified yet) and that haven't been alerted on yet.
+func (r *GrantRepo) DueForDeadlineAlert(ctx context.Context) ([]model.Grant, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id, title, funder, amount, stage, priority, description, link,
+		       deadline, assigned_to, office_tag, notes, created_at
+		FROM grants
+		WHERE stage IN ('incoming', 'in_progress')
+		  AND deadline_notified = false
+		  AND deadline IS NOT NULL
+		  AND deadline <= now() + interval '72 hours'`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var grants []model.Grant
+	for rows.Next() {
+		var g model.Grant
+		if err := rows.Scan(&g.ID, &g.Title, &g.Funder, &g.Amount, &g.Stage, &g.Priority,
+			&g.Description, &g.Link, &g.Deadline, &g.AssignedTo, &g.OfficeTag, &g.Notes, &g.CreatedAt); err != nil {
+			return nil, err
+		}
+		grants = append(grants, g)
+	}
+	return grants, nil
+}
+
+// MarkDeadlineNotified flags a grant so the 72-hour alert isn't sent again.
+func (r *GrantRepo) MarkDeadlineNotified(ctx context.Context, id string) error {
+	_, err := r.db.Exec(ctx, `UPDATE grants SET deadline_notified=true WHERE id=$1`, id)
+	return err
+}
+
+// AdminManagerUserIDs returns the IDs of every admin/manager, used as the
+// audience for grant-deadline alerts.
+func (r *GrantRepo) AdminManagerUserIDs(ctx context.Context) ([]string, error) {
+	rows, err := r.db.Query(ctx, `SELECT id FROM users WHERE role IN ('admin', 'manager')`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
 // ─── Voting ───────────────────────────────────────────────────────────────────
 
 type VotingRepo struct {

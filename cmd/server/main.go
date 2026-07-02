@@ -86,6 +86,46 @@ func main() {
 		}
 	}()
 
+	// ── Grant deadline alerts: check every hour, notify all admins/managers
+	//    72 hours before a grant's deadline (incoming/in_progress only) ───────
+	go func() {
+		checkDeadlines := func() {
+			grants, err := grantRepo.DueForDeadlineAlert(ctx)
+			if err != nil {
+				log.Printf("grant deadline check failed: %v", err)
+				return
+			}
+			if len(grants) == 0 {
+				return
+			}
+			recipients, err := grantRepo.AdminManagerUserIDs(ctx)
+			if err != nil {
+				log.Printf("failed to load admin/manager list for grant alerts: %v", err)
+				return
+			}
+			for _, g := range grants {
+				deadlineStr := ""
+				if g.Deadline != nil {
+					deadlineStr = g.Deadline.Format("Jan 2, 2006")
+				}
+				body := "Grant deadline approaching: " + g.Title + " (" + g.Funder + ") — due " + deadlineStr
+				for _, uid := range recipients {
+					_ = notifRepo.Create(ctx, uid, "grant_deadline", body, &g.ID)
+				}
+				if err := grantRepo.MarkDeadlineNotified(ctx, g.ID); err != nil {
+					log.Printf("failed to mark grant %s as notified: %v", g.ID, err)
+				}
+			}
+			log.Printf("grant deadline alerts sent for %d grant(s)", len(grants))
+		}
+		checkDeadlines() // run once at startup so we don't wait a full hour
+		ticker := time.NewTicker(1 * time.Hour)
+		defer ticker.Stop()
+		for range ticker.C {
+			checkDeadlines()
+		}
+	}()
+
 	// ── Graceful shutdown ────────────────────────────────────────────────────
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
