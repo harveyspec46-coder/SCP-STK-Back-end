@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -263,6 +264,15 @@ func (r *CRMRepo) ListAssignments(ctx context.Context, jobID string) ([]model.Jo
 	return assignments, nil
 }
 
+// SetJobSchedule sets the job's scheduled time and, if it's still at the
+// initial stage, advances it to staff_assigned now that someone has a time.
+func (r *CRMRepo) SetJobSchedule(ctx context.Context, jobID string, scheduledAt time.Time) error {
+	_, err := r.db.Exec(ctx,
+		`UPDATE crm_jobs SET scheduled_at=$1, stage=CASE WHEN stage='job_scheduled' THEN 'staff_assigned' ELSE stage END WHERE id=$2`,
+		scheduledAt, jobID)
+	return err
+}
+
 // AssignStaff adds a staff member to a job. A staff member can have multiple
 // active job assignments simultaneously — this is by design for the workforce model.
 func (r *CRMRepo) AssignStaff(ctx context.Context, jobID string, req model.AssignStaffRequest) (*model.JobAssignment, error) {
@@ -319,6 +329,7 @@ func (r *CRMRepo) MyJobs(ctx context.Context, userID string) ([]model.Job, error
 		JOIN crm_clients c ON c.id = j.client_id
 		WHERE a.user_id = $1
 		  AND j.stage NOT IN ('completed','invoiced')
+		  AND j.scheduled_at IS NOT NULL
 		ORDER BY j.scheduled_at ASC NULLS LAST`
 
 	rows, err := r.db.Query(ctx, query, userID)

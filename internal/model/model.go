@@ -148,8 +148,9 @@ type JobAssignment struct {
 }
 
 type AssignStaffRequest struct {
-	UserID    string `json:"user_id"`
-	RoleOnJob string `json:"role_on_job"` // lead | support
+	UserID      string     `json:"user_id"`
+	RoleOnJob   string     `json:"role_on_job"` // lead | support
+	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
 }
 
 // ─── Task ─────────────────────────────────────────────────────────────────────

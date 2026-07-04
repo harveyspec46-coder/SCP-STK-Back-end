@@ -257,11 +257,16 @@ func (h *CRMHandler) AssignStaff(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to assign staff")
 		return
 	}
-
+	if req.ScheduledAt != nil {
+		_ = h.crm.SetJobSchedule(r.Context(), jobID, *req.ScheduledAt)
+	}
 	// Notify the assigned staff member
 	job, _ := h.crm.GetJob(r.Context(), jobID)
 	if job != nil {
 		body := "You've been assigned to a " + job.ServiceType + " job at " + job.Address
+		if job.ScheduledAt != nil {
+			body += " on " + job.ScheduledAt.Format("Jan 2, 2006 at 3:04 PM")
+		}
 		if activeJobs > 0 {
 			body += " (you have " + itoa(activeJobs) + " other active job(s))"
 		}
