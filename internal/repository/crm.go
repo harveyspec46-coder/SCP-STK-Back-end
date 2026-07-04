@@ -101,7 +101,7 @@ func (r *CRMRepo) ListJobs(ctx context.Context, stage, serviceType, officeFilter
 		       c.full_name, c.phone, c.address
 		FROM crm_jobs j
 		JOIN crm_clients c ON c.id = j.client_id
-		WHERE ($1 = '' OR j.stage = $1)
+		WHERE ($1 = '' OR j.stage::text = $1)
 		  AND ($2 = '' OR j.service_type = $2)
 		ORDER BY j.scheduled_at ASC NULLS LAST, j.created_at DESC`
 
