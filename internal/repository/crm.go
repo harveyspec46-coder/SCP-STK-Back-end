@@ -128,6 +128,16 @@ func (r *CRMRepo) ListJobs(ctx context.Context, stage, serviceType, officeFilter
 		j.Client.ID = j.ClientID
 		jobs = append(jobs, j)
 	}
+
+	// Populate assignments for each job so board/calendar views can show
+	// who's actually assigned instead of always reading as "Unassigned".
+	for i := range jobs {
+		asgns, err := r.ListAssignments(ctx, jobs[i].ID)
+		if err == nil {
+			jobs[i].Assignments = asgns
+		}
+	}
+
 	return jobs, nil
 }
 
