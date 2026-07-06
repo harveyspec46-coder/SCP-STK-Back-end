@@ -264,9 +264,13 @@ func (r *CRMRepo) ListAssignments(ctx context.Context, jobID string) ([]model.Jo
 	for rows.Next() {
 		var a model.JobAssignment
 		a.User = &model.User{}
+		var phone *string
 		if err := rows.Scan(&a.ID, &a.JobID, &a.UserID, &a.RoleOnJob, &a.AssignedAt,
-			&a.User.FullName, &a.User.Role, &a.User.Office, &a.User.Phone); err != nil {
+			&a.User.FullName, &a.User.Role, &a.User.Office, &phone); err != nil {
 			return nil, err
+		}
+		if phone != nil {
+			a.User.Phone = *phone
 		}
 		a.User.ID = a.UserID
 		assignments = append(assignments, a)
