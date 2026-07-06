@@ -81,6 +81,7 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 				r.Put("/{id}", h.CRM.UpdateJob)
 				r.Patch("/{id}/stage", h.CRM.AdvanceStage)
 				r.Post("/{id}/assign", h.CRM.AssignStaff)
+				r.Patch("/{id}/reschedule", h.CRM.RescheduleJob)
 				r.Delete("/{id}/assign/{uid}", h.CRM.RemoveAssignment)
 				r.Post("/{id}/tasks", h.CRM.CreateJobTask)
 			})

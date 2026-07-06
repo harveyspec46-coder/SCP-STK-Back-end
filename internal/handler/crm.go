@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/scp-stk/hub/internal/auth"
@@ -277,6 +278,26 @@ func (h *CRMHandler) AssignStaff(w http.ResponseWriter, r *http.Request) {
 		Data:    assignment,
 		Message: "staff assigned — current workload: " + itoa(activeJobs) + " other active jobs",
 	})
+}
+
+// PATCH /api/crm/jobs/:id/reschedule — moves an already-scheduled job to a
+// new time without touching its staff assignments (used for drag-to-reschedule
+// in the Shift & Schedule calendar).
+func (h *CRMHandler) RescheduleJob(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "id")
+	var body struct {
+		ScheduledAt time.Time `json:"scheduled_at"`
+	}
+	if err := decode(r, &body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.crm.SetJobSchedule(r.Context(), jobID, body.ScheduledAt); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to reschedule job")
+		return
+	}
+	job, _ := h.crm.GetJob(r.Context(), jobID)
+	writeJSON(w, http.StatusOK, model.Response{Data: job, Message: "job rescheduled"})
 }
 
 // DELETE /api/crm/jobs/:id/assign/:uid
