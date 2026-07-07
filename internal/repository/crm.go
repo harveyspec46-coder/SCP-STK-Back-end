@@ -98,7 +98,7 @@ func (r *CRMRepo) DeleteClient(ctx context.Context, id string) error {
 func (r *CRMRepo) ListJobs(ctx context.Context, stage, serviceType, officeFilter string) ([]model.Job, error) {
 	query := `
 		SELECT j.id, j.client_id, j.service_type, j.stage, j.address, j.description,
-		       j.tools_used, j.scheduled_at, j.arrived_at, j.completed_at, j.price, j.notes, j.created_at,
+		       j.tools_used, j.scheduled_at, j.arrived_at, j.completed_at, j.price, j.estimated_hours, j.notes, j.created_at,
 		       c.full_name, c.phone, c.address
 		FROM crm_jobs j
 		JOIN crm_clients c ON c.id = j.client_id
@@ -120,7 +120,7 @@ func (r *CRMRepo) ListJobs(ctx context.Context, stage, serviceType, officeFilter
 			&j.ID, &j.ClientID, &j.ServiceType, &j.Stage,
 			&j.Address, &j.Description, &j.ToolsUsed,
 			&j.ScheduledAt, &j.ArrivedAt, &j.CompletedAt,
-			&j.Price, &j.Notes, &j.CreatedAt,
+			&j.Price, &j.EstimatedHours, &j.Notes, &j.CreatedAt,
 			&j.Client.FullName, &j.Client.Phone, &j.Client.Address,
 		); err != nil {
 			return nil, err
@@ -144,7 +144,7 @@ func (r *CRMRepo) ListJobs(ctx context.Context, stage, serviceType, officeFilter
 func (r *CRMRepo) GetJob(ctx context.Context, id string) (*model.Job, error) {
 	query := `
 		SELECT j.id, j.client_id, j.service_type, j.stage, j.address, j.description,
-		       j.tools_used, j.scheduled_at, j.arrived_at, j.completed_at, j.price, j.notes, j.created_at,
+		       j.tools_used, j.scheduled_at, j.arrived_at, j.completed_at, j.price, j.estimated_hours, j.notes, j.created_at,
 		       c.id, c.full_name, c.phone, c.email, c.address
 		FROM crm_jobs j
 		JOIN crm_clients c ON c.id = j.client_id
@@ -156,7 +156,7 @@ func (r *CRMRepo) GetJob(ctx context.Context, id string) (*model.Job, error) {
 		&j.ID, &j.ClientID, &j.ServiceType, &j.Stage,
 		&j.Address, &j.Description, &j.ToolsUsed,
 		&j.ScheduledAt, &j.ArrivedAt, &j.CompletedAt,
-		&j.Price, &j.Notes, &j.CreatedAt,
+		&j.Price, &j.EstimatedHours, &j.Notes, &j.CreatedAt,
 		&j.Client.ID, &j.Client.FullName, &j.Client.Phone, &j.Client.Email, &j.Client.Address,
 	)
 	if err != nil {
@@ -181,17 +181,17 @@ func (r *CRMRepo) GetJob(ctx context.Context, id string) (*model.Job, error) {
 func (r *CRMRepo) CreateJob(ctx context.Context, req model.CreateJobRequest) (*model.Job, error) {
 	id := uuid.New().String()
 	query := `
-		INSERT INTO crm_jobs (id, client_id, service_type, stage, address, description, tools_used, scheduled_at, price, notes)
-		VALUES ($1,$2,$3,'job_scheduled',$4,$5,$6,$7,$8,$9)
-		RETURNING id, client_id, service_type, stage, address, description, tools_used, scheduled_at, arrived_at, completed_at, price, notes, created_at`
+		INSERT INTO crm_jobs (id, client_id, service_type, stage, address, description, tools_used, scheduled_at, price, estimated_hours, notes)
+		VALUES ($1,$2,$3,'job_scheduled',$4,$5,$6,$7,$8,$9,$10)
+		RETURNING id, client_id, service_type, stage, address, description, tools_used, scheduled_at, arrived_at, completed_at, price, estimated_hours, notes, created_at`
 	var j model.Job
 	err := r.db.QueryRow(ctx, query,
 		id, req.ClientID, req.ServiceType, req.Address, req.Description,
-		req.ToolsUsed, req.ScheduledAt, req.Price, req.Notes,
+		req.ToolsUsed, req.ScheduledAt, req.Price, req.EstimatedHours, req.Notes,
 	).Scan(&j.ID, &j.ClientID, &j.ServiceType, &j.Stage,
 		&j.Address, &j.Description, &j.ToolsUsed,
 		&j.ScheduledAt, &j.ArrivedAt, &j.CompletedAt,
-		&j.Price, &j.Notes, &j.CreatedAt)
+		&j.Price, &j.EstimatedHours, &j.Notes, &j.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("create job: %w", err)
 	}
@@ -201,23 +201,24 @@ func (r *CRMRepo) CreateJob(ctx context.Context, req model.CreateJobRequest) (*m
 func (r *CRMRepo) UpdateJob(ctx context.Context, id string, req model.UpdateJobRequest) (*model.Job, error) {
 	query := `
 		UPDATE crm_jobs SET
-			service_type = COALESCE(NULLIF($1,''), service_type),
-			address      = COALESCE(NULLIF($2,''), address),
-			description  = COALESCE(NULLIF($3,''), description),
-			tools_used   = CASE WHEN $4::text[] IS NOT NULL THEN $4 ELSE tools_used END,
-			scheduled_at = COALESCE($5, scheduled_at),
-			price        = CASE WHEN $6 > 0 THEN $6 ELSE price END,
-			notes        = COALESCE(NULLIF($7,''), notes)
-		WHERE id = $8
-		RETURNING id, client_id, service_type, stage, address, description, tools_used, scheduled_at, arrived_at, completed_at, price, notes, created_at`
+			service_type    = COALESCE(NULLIF($1,''), service_type),
+			address         = COALESCE(NULLIF($2,''), address),
+			description     = COALESCE(NULLIF($3,''), description),
+			tools_used      = CASE WHEN $4::text[] IS NOT NULL THEN $4 ELSE tools_used END,
+			scheduled_at    = COALESCE($5, scheduled_at),
+			price           = CASE WHEN $6 > 0 THEN $6 ELSE price END,
+			estimated_hours = CASE WHEN $7 > 0 THEN $7 ELSE estimated_hours END,
+			notes           = COALESCE(NULLIF($8,''), notes)
+		WHERE id = $9
+		RETURNING id, client_id, service_type, stage, address, description, tools_used, scheduled_at, arrived_at, completed_at, price, estimated_hours, notes, created_at`
 	var j model.Job
 	err := r.db.QueryRow(ctx, query,
 		req.ServiceType, req.Address, req.Description,
-		req.ToolsUsed, req.ScheduledAt, req.Price, req.Notes, id,
+		req.ToolsUsed, req.ScheduledAt, req.Price, req.EstimatedHours, req.Notes, id,
 	).Scan(&j.ID, &j.ClientID, &j.ServiceType, &j.Stage,
 		&j.Address, &j.Description, &j.ToolsUsed,
 		&j.ScheduledAt, &j.ArrivedAt, &j.CompletedAt,
-		&j.Price, &j.Notes, &j.CreatedAt)
+		&j.Price, &j.EstimatedHours, &j.Notes, &j.CreatedAt)
 	if err != nil {
 		return nil, fmt.Errorf("update job: %w", err)
 	}

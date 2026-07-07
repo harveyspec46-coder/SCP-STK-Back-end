@@ -102,33 +102,36 @@ type Job struct {
 	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
 	ArrivedAt   *time.Time `json:"arrived_at,omitempty"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	Price       float64    `json:"price"`
-	Notes       string     `json:"notes,omitempty"`
-	CreatedAt   time.Time  `json:"created_at"`
+	Price          float64    `json:"price"`
+	EstimatedHours float64    `json:"estimated_hours"`
+	Notes          string     `json:"notes,omitempty"`
+	CreatedAt      time.Time  `json:"created_at"`
 	// Computed relations
 	Assignments []JobAssignment `json:"assignments,omitempty"`
 	Tasks       []Task          `json:"tasks,omitempty"`
 }
 
 type CreateJobRequest struct {
-	ClientID    string     `json:"client_id"`
-	ServiceType string     `json:"service_type"`
-	Address     string     `json:"address"`
-	Description string     `json:"description"`
-	ToolsUsed   []string   `json:"tools_used"`
-	ScheduledAt *time.Time `json:"scheduled_at"`
-	Price       float64    `json:"price"`
-	Notes       string     `json:"notes"`
+	ClientID       string     `json:"client_id"`
+	ServiceType    string     `json:"service_type"`
+	Address        string     `json:"address"`
+	Description    string     `json:"description"`
+	ToolsUsed      []string   `json:"tools_used"`
+	ScheduledAt    *time.Time `json:"scheduled_at"`
+	Price          float64    `json:"price"`
+	EstimatedHours float64    `json:"estimated_hours"`
+	Notes          string     `json:"notes"`
 }
 
 type UpdateJobRequest struct {
-	ServiceType string     `json:"service_type,omitempty"`
-	Address     string     `json:"address,omitempty"`
-	Description string     `json:"description,omitempty"`
-	ToolsUsed   []string   `json:"tools_used,omitempty"`
-	ScheduledAt *time.Time `json:"scheduled_at,omitempty"`
-	Price       float64    `json:"price,omitempty"`
-	Notes       string     `json:"notes,omitempty"`
+	ServiceType    string     `json:"service_type,omitempty"`
+	Address        string     `json:"address,omitempty"`
+	Description    string     `json:"description,omitempty"`
+	ToolsUsed      []string   `json:"tools_used,omitempty"`
+	ScheduledAt    *time.Time `json:"scheduled_at,omitempty"`
+	Price          float64    `json:"price,omitempty"`
+	EstimatedHours float64    `json:"estimated_hours,omitempty"`
+	Notes          string     `json:"notes,omitempty"`
 }
 
 type AdvanceStageRequest struct {
