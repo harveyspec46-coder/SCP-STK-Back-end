@@ -109,16 +109,14 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 		})
 
 		// ── Finance + Hours + Payroll — ADMIN ONLY ───────────────────────────
+				// ── Finance + Payroll — ADMIN ONLY ────────────────────────────────────
 		r.Group(func(r chi.Router) {
 			r.Use(auth.RequireExactRole("admin"))
-
-			r.Route("/hours", func(r chi.Router) {
-				r.Get("/", h.Finance.ListHours)
-				r.Post("/", h.Finance.LogHours)
-			})
 			r.Route("/payroll", func(r chi.Router) {
 				r.Get("/", h.Finance.GetPayroll)
+				r.Get("/all", h.Finance.ListPayroll)
 				r.Patch("/{uid}/adjust", h.Finance.AdjustPay)
+				r.Post("/{uid}/log-payment", h.Finance.LogPayment)
 			})
 			r.Get("/finance/summary", h.Finance.Summary)
 		})

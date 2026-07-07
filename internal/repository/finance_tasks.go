@@ -247,101 +247,160 @@ func NewFinanceRepo(db *pgxpool.Pool) *FinanceRepo {
 	return &FinanceRepo{db: db}
 }
 
-func (r *FinanceRepo) LogHours(ctx context.Context, userID string, req model.LogHoursRequest) (*model.HoursEntry, error) {
-	id := uuid.New().String()
-	query := `
-		INSERT INTO hours_log (id, user_id, job_id, hours, date, notes)
-		VALUES ($1,$2,$3,$4,$5,$6)
-		RETURNING id, user_id, job_id, hours, date, notes, created_at`
-	var h model.HoursEntry
-	err := r.db.QueryRow(ctx, query, id, userID, req.JobID, req.Hours, req.Date, req.Notes).
-		Scan(&h.ID, &h.UserID, &h.JobID, &h.Hours, &h.Date, &h.Notes, &h.CreatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("log hours: %w", err)
+// CurrentPayPeriod returns the current custom pay cycle: the 29th of a month
+// through the 28th of the next month (org policy). end is exclusive.
+func CurrentPayPeriod() (start, end time.Time, label string) {
+	now := time.Now()
+	if now.Day() >= 29 {
+		start = time.Date(now.Year(), now.Month(), 29, 0, 0, 0, 0, now.Location())
+	} else {
+		prev := now.AddDate(0, -1, 0)
+		start = time.Date(prev.Year(), prev.Month(), 29, 0, 0, 0, 0, now.Location())
 	}
-	return &h, nil
+	end = start.AddDate(0, 1, 0)
+	label = start.Format("Jan 2") + " – " + end.AddDate(0, 0, -1).Format("Jan 2, 2006")
+	return start, end, label
 }
 
-func (r *FinanceRepo) ListHours(ctx context.Context, userID string) ([]model.HoursEntry, error) {
-	query := `
-		SELECT id, user_id, job_id, hours, date, notes, created_at
-		FROM hours_log WHERE user_id=$1
-		ORDER BY date DESC`
-	rows, err := r.db.Query(ctx, query, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var entries []model.HoursEntry
-	for rows.Next() {
-		var h model.HoursEntry
-		rows.Scan(&h.ID, &h.UserID, &h.JobID, &h.Hours, &h.Date, &h.Notes, &h.CreatedAt)
-		entries = append(entries, h)
-	}
-	return entries, nil
-}
+// GetPayroll calculates a staff member's pay for the current cycle. Hours
+// come from estimated_hours on jobs they're assigned to (not a separate
+// hours log) — this is the org's chosen source of truth for payroll hours.
+func (r *FinanceRepo) GetPayroll(ctx context.Context, userID string) (*model.PayrollEntry, error) {
+	start, end, label := CurrentPayPeriod()
 
-// GetPayroll calculates gross pay for a user in a given period (YYYY-MM).
-// hourly_rate is stored in users table. Manual adjustments are applied on top.
-func (r *FinanceRepo) GetPayroll(ctx context.Context, userID, period string) (*model.PayrollEntry, error) {
 	query := `
 		SELECT
 			u.id, u.full_name, u.role,
-			COALESCE(SUM(h.hours), 0) AS total_hours,
 			COALESCE(u.hourly_rate, 22.50) AS hourly_rate,
+			COALESCE(job_stats.job_count, 0) AS job_count,
+			COALESCE(job_stats.total_hours, 0) AS total_hours,
 			COALESCE(pa.adjustment, 0) AS adjustment,
-			COALESCE(pa.approved, false) AS approved
+			COALESCE(pa.paid, false) AS paid,
+			pa.paid_amount, pa.paid_at
 		FROM users u
-		LEFT JOIN hours_log h
-			ON h.user_id = u.id
-			AND to_char(h.date, 'YYYY-MM') = $2
-		LEFT JOIN payroll_adjustments pa
-			ON pa.user_id = u.id AND pa.period = $2
-		WHERE u.id = $1
-		GROUP BY u.id, u.full_name, u.role, u.hourly_rate, pa.adjustment, pa.approved`
+		LEFT JOIN (
+			SELECT a.user_id, COUNT(*) AS job_count, SUM(j.estimated_hours) AS total_hours
+			FROM crm_job_assignments a
+			JOIN crm_jobs j ON j.id = a.job_id
+			WHERE j.scheduled_at >= $2 AND j.scheduled_at < $3
+			GROUP BY a.user_id
+		) job_stats ON job_stats.user_id = u.id
+		LEFT JOIN payroll_adjustments pa ON pa.user_id = u.id AND pa.period = $4
+		WHERE u.id = $1`
 
 	var p model.PayrollEntry
 	var user model.User
 	p.User = &user
-	err := r.db.QueryRow(ctx, query, userID, period).Scan(
+	err := r.db.QueryRow(ctx, query, userID, start, end, label).Scan(
 		&user.ID, &user.FullName, &user.Role,
-		&p.TotalHours, &p.HourlyRate, &p.Adjustment, &p.Approved,
+		&p.HourlyRate, &p.JobCount, &p.TotalHours, &p.Adjustment,
+		&p.Paid, &p.PaidAmount, &p.PaidAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get payroll: %w", err)
 	}
 	p.UserID = userID
-	p.Period = period
+	p.Period = label
 	p.GrossPay = p.TotalHours * p.HourlyRate
 	p.NetPay = p.GrossPay + p.Adjustment
 	return &p, nil
 }
 
-func (r *FinanceRepo) AdjustPay(ctx context.Context, userID, period string, req model.AdjustPayRequest) error {
+// ListPayrollForAllStaff returns the current cycle's payroll for every
+// staff-role user, for the Payroll tab.
+func (r *FinanceRepo) ListPayrollForAllStaff(ctx context.Context) ([]model.PayrollEntry, error) {
+	rows, err := r.db.Query(ctx, `SELECT id FROM users WHERE role = 'staff'`)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+
+	var entries []model.PayrollEntry
+	for _, id := range ids {
+		p, err := r.GetPayroll(ctx, id)
+		if err != nil {
+			continue
+		}
+		entries = append(entries, *p)
+	}
+	return entries, nil
+}
+
+func (r *FinanceRepo) AdjustPay(ctx context.Context, userID string, req model.AdjustPayRequest) error {
+	_, _, label := CurrentPayPeriod()
 	query := `
 		INSERT INTO payroll_adjustments (id, user_id, period, adjustment, reason)
 		VALUES ($1,$2,$3,$4,$5)
 		ON CONFLICT (user_id, period) DO UPDATE
 		SET adjustment = EXCLUDED.adjustment, reason = EXCLUDED.reason`
-	_, err := r.db.Exec(ctx, query, uuid.New().String(), userID, period, req.Adjustment, req.Reason)
+	_, err := r.db.Exec(ctx, query, uuid.New().String(), userID, label, req.Adjustment, req.Reason)
 	return err
 }
 
-func (r *FinanceRepo) GetSummary(ctx context.Context, period string) (*model.FinanceSummary, error) {
+// LogPayment records that a staff member's current-cycle pay was actually
+// paid out (cash, etc), once an admin confirms it — separate from the
+// calculated net pay so partial/rounded real-world payments can be recorded.
+func (r *FinanceRepo) LogPayment(ctx context.Context, userID string, amount float64) error {
+	_, _, label := CurrentPayPeriod()
 	query := `
-		SELECT
-			COALESCE(SUM(CASE WHEN type='revenue' THEN amount END),0) AS revenue,
-			COALESCE(SUM(CASE WHEN type='expense' THEN amount END),0) AS expenses,
-			COALESCE(SUM(CASE WHEN type='payout'  THEN amount END),0) AS payouts
-		FROM finance_entries
-		WHERE to_char(date, 'YYYY-MM') = $1`
+		INSERT INTO payroll_adjustments (id, user_id, period, adjustment, reason, paid, paid_amount, paid_at)
+		VALUES ($1,$2,$3,0,'',true,$4,NOW())
+		ON CONFLICT (user_id, period) DO UPDATE
+		SET paid = true, paid_amount = EXCLUDED.paid_amount, paid_at = NOW()`
+	_, err := r.db.Exec(ctx, query, uuid.New().String(), userID, label, amount)
+	return err
+}
+
+// GetSummary computes Overview tab figures directly from crm_jobs for the
+// current pay cycle — invoiced revenue, pipeline value (everything else),
+// total jobs created, and total payroll due (unpaid) across all staff.
+func (r *FinanceRepo) GetSummary(ctx context.Context) (*model.FinanceSummary, error) {
+	start, end, label := CurrentPayPeriod()
 	var s model.FinanceSummary
-	s.Period = period
-	err := r.db.QueryRow(ctx, query, period).Scan(&s.TotalRevenue, &s.TotalExpenses, &s.TotalPayouts)
+	s.Period = label
+
+	err := r.db.QueryRow(ctx, `
+		SELECT COALESCE(SUM(price), 0) FROM crm_jobs
+		WHERE stage = 'invoiced' AND scheduled_at >= $1 AND scheduled_at < $2`,
+		start, end).Scan(&s.InvoicedRevenue)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invoiced revenue: %w", err)
 	}
-	s.NetBalance = s.TotalRevenue - s.TotalExpenses - s.TotalPayouts
+
+	err = r.db.QueryRow(ctx, `
+		SELECT COALESCE(SUM(price), 0) FROM crm_jobs
+		WHERE stage != 'invoiced' AND scheduled_at >= $1 AND scheduled_at < $2`,
+		start, end).Scan(&s.PipelineValue)
+	if err != nil {
+		return nil, fmt.Errorf("pipeline value: %w", err)
+	}
+
+	err = r.db.QueryRow(ctx, `
+		SELECT COUNT(*) FROM crm_jobs
+		WHERE created_at >= $1 AND created_at < $2`,
+		start, end).Scan(&s.TotalJobs)
+	if err != nil {
+		return nil, fmt.Errorf("total jobs: %w", err)
+	}
+
+	payrolls, err := r.ListPayrollForAllStaff(ctx)
+	if err == nil {
+		for _, p := range payrolls {
+			if !p.Paid {
+				s.PayrollDue += p.NetPay
+			}
+		}
+	}
+
 	return &s, nil
 }
 

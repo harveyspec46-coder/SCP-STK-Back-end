@@ -256,15 +256,18 @@ type LogHoursRequest struct {
 }
 
 type PayrollEntry struct {
-	UserID     string  `json:"user_id"`
-	User       *User   `json:"user,omitempty"`
-	Period     string  `json:"period"` // e.g. "2026-04"
-	TotalHours float64 `json:"total_hours"`
-	HourlyRate float64 `json:"hourly_rate"`
-	GrossPay   float64 `json:"gross_pay"`
-	Adjustment float64 `json:"adjustment"`
-	NetPay     float64 `json:"net_pay"`
-	Approved   bool    `json:"approved"`
+	UserID     string     `json:"user_id"`
+	User       *User      `json:"user,omitempty"`
+	Period     string     `json:"period"` // human-readable label, e.g. "Jun 29 – Jul 28, 2026"
+	JobCount   int        `json:"job_count"`
+	TotalHours float64    `json:"total_hours"`
+	HourlyRate float64    `json:"hourly_rate"`
+	GrossPay   float64    `json:"gross_pay"`
+	Adjustment float64    `json:"adjustment"`
+	NetPay     float64    `json:"net_pay"`
+	Paid       bool       `json:"paid"`
+	PaidAmount float64    `json:"paid_amount,omitempty"`
+	PaidAt     *time.Time `json:"paid_at,omitempty"`
 }
 
 type AdjustPayRequest struct {
@@ -273,11 +276,11 @@ type AdjustPayRequest struct {
 }
 
 type FinanceSummary struct {
-	Period        string  `json:"period"`
-	TotalRevenue  float64 `json:"total_revenue"`
-	TotalExpenses float64 `json:"total_expenses"`
-	TotalPayouts  float64 `json:"total_payouts"`
-	NetBalance    float64 `json:"net_balance"`
+	Period          string  `json:"period"` // human-readable label, e.g. "Jun 29 – Jul 28, 2026"
+	InvoicedRevenue float64 `json:"invoiced_revenue"`
+	PipelineValue   float64 `json:"pipeline_value"`
+	TotalJobs       int     `json:"total_jobs"`
+	PayrollDue      float64 `json:"payroll_due"`
 }
 
 // ─── Voting ───────────────────────────────────────────────────────────────────

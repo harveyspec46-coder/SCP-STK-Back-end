@@ -224,50 +224,14 @@ func NewFinanceHandler(repo *repository.FinanceRepo) *FinanceHandler {
 	return &FinanceHandler{repo: repo}
 }
 
-// GET /api/hours
-func (h *FinanceHandler) ListHours(w http.ResponseWriter, r *http.Request) {
-	user := auth.GetUser(r.Context())
-	entries, err := h.repo.ListHours(r.Context(), user.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list hours")
-		return
-	}
-	writeJSON(w, http.StatusOK, model.Response{Data: entries, Total: len(entries)})
-}
-
-// POST /api/hours
-func (h *FinanceHandler) LogHours(w http.ResponseWriter, r *http.Request) {
-	user := auth.GetUser(r.Context())
-	var req model.LogHoursRequest
-	if err := decode(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if req.Hours <= 0 {
-		writeError(w, http.StatusBadRequest, "hours must be greater than 0")
-		return
-	}
-	entry, err := h.repo.LogHours(r.Context(), user.ID, req)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to log hours")
-		return
-	}
-	writeJSON(w, http.StatusCreated, model.Response{Data: entry})
-}
-
-// GET /api/payroll?period=2026-04
+// GET /api/payroll — staff see only their own; admin/manager can query any user via ?user_id=
 func (h *FinanceHandler) GetPayroll(w http.ResponseWriter, r *http.Request) {
 	user := auth.GetUser(r.Context())
-	period := r.URL.Query().Get("period")
-	if period == "" {
-		period = time.Now().Format("2006-01")
-	}
-	// Staff see only their own payroll; admin/manager can query any user
 	userID := user.ID
 	if (user.Role == "admin" || user.Role == "manager") && r.URL.Query().Get("user_id") != "" {
 		userID = r.URL.Query().Get("user_id")
 	}
-	entry, err := h.repo.GetPayroll(r.Context(), userID, period)
+	entry, err := h.repo.GetPayroll(r.Context(), userID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get payroll")
 		return
@@ -275,34 +239,53 @@ func (h *FinanceHandler) GetPayroll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, model.Response{Data: entry})
 }
 
+// GET /api/payroll/all — admin/manager only, current cycle for every staff member
+func (h *FinanceHandler) ListPayroll(w http.ResponseWriter, r *http.Request) {
+	entries, err := h.repo.ListPayrollForAllStaff(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list payroll")
+		return
+	}
+	writeJSON(w, http.StatusOK, model.Response{Data: entries, Total: len(entries)})
+}
+
 // PATCH /api/payroll/:uid/adjust — admin/manager only
 func (h *FinanceHandler) AdjustPay(w http.ResponseWriter, r *http.Request) {
 	uid := chi.URLParam(r, "uid")
-	period := r.URL.Query().Get("period")
-	if period == "" {
-		period = time.Now().Format("2006-01")
-	}
 	var req model.AdjustPayRequest
 	if err := decode(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if err := h.repo.AdjustPay(r.Context(), uid, period, req); err != nil {
+	if err := h.repo.AdjustPay(r.Context(), uid, req); err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to adjust pay")
 		return
 	}
-	// Return updated payroll
-	entry, _ := h.repo.GetPayroll(r.Context(), uid, period)
+	entry, _ := h.repo.GetPayroll(r.Context(), uid)
 	writeJSON(w, http.StatusOK, model.Response{Data: entry, Message: "adjustment applied"})
 }
 
-// GET /api/finance/summary?period=2026-04
-func (h *FinanceHandler) Summary(w http.ResponseWriter, r *http.Request) {
-	period := r.URL.Query().Get("period")
-	if period == "" {
-		period = time.Now().Format("2006-01")
+// POST /api/payroll/:uid/log-payment — admin/manager only; records a real payment made
+func (h *FinanceHandler) LogPayment(w http.ResponseWriter, r *http.Request) {
+	uid := chi.URLParam(r, "uid")
+	var req struct {
+		Amount float64 `json:"amount"`
 	}
-	summary, err := h.repo.GetSummary(r.Context(), period)
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.repo.LogPayment(r.Context(), uid, req.Amount); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to log payment")
+		return
+	}
+	entry, _ := h.repo.GetPayroll(r.Context(), uid)
+	writeJSON(w, http.StatusOK, model.Response{Data: entry, Message: "payment logged"})
+}
+
+// GET /api/finance/summary
+func (h *FinanceHandler) Summary(w http.ResponseWriter, r *http.Request) {
+	summary, err := h.repo.GetSummary(r.Context())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to get summary")
 		return
