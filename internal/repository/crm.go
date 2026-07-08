@@ -198,6 +198,13 @@ func (r *CRMRepo) CreateJob(ctx context.Context, req model.CreateJobRequest) (*m
 	return &j, nil
 }
 
+// DeleteJob removes a job entirely (assignments/tasks/attachments cascade
+// via FK ON DELETE CASCADE where configured).
+func (r *CRMRepo) DeleteJob(ctx context.Context, id string) error {
+	_, err := r.db.Exec(ctx, `DELETE FROM crm_jobs WHERE id=$1`, id)
+	return err
+}
+
 func (r *CRMRepo) UpdateJob(ctx context.Context, id string, req model.UpdateJobRequest) (*model.Job, error) {
 	query := `
 		UPDATE crm_jobs SET

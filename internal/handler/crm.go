@@ -164,6 +164,25 @@ func (h *CRMHandler) CreateJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to create job")
 		return
 	}
+
+	// Assign staff at creation time (new simplified flow: admin creates AND
+	// assigns in one step). Each assignment notifies that staff member.
+	for _, uid := range req.AssignedTo {
+		if uid == "" {
+			continue
+		}
+		_, _ = h.crm.AssignStaff(r.Context(), job.ID, model.AssignStaffRequest{
+			UserID:    uid,
+			RoleOnJob: "support",
+		})
+	}
+	if len(req.AssignedTo) > 0 {
+		updated, err := h.crm.AdvanceStage(r.Context(), job.ID, model.AdvanceStageRequest{Stage: model.JobStage("staff_assigned")})
+		if err == nil {
+			job = updated
+		}
+	}
+
 	writeJSON(w, http.StatusCreated, model.Response{Data: job})
 }
 
@@ -179,6 +198,16 @@ func (h *CRMHandler) GetJob(w http.ResponseWriter, r *http.Request) {
 }
 
 // PUT /api/crm/jobs/:id
+// DELETE /api/crm/jobs/:id — admin only
+func (h *CRMHandler) DeleteJob(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := h.crm.DeleteJob(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete job")
+		return
+	}
+	writeJSON(w, http.StatusOK, model.Response{Message: "job deleted"})
+}
+
 func (h *CRMHandler) UpdateJob(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var req model.UpdateJobRequest
@@ -204,15 +233,19 @@ func (h *CRMHandler) AdvanceStage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	validStages := map[model.JobStage]bool{
-		"job_scheduled": true, "staff_assigned": true,
-		"arrived_at_site": true, "completed": true, "invoiced": true,
-	}
-	if !validStages[req.Stage] {
-		writeError(w, http.StatusBadRequest, "invalid stage value")
+	// Admins may only move a job from completed to invoiced — every earlier
+	// transition belongs to the assigned staff member via their own
+	// checkin/complete endpoints. This is enforced here, not just hidden in
+	// the UI, since this route is reachable directly.
+	existing, err := h.crm.GetJob(r.Context(), id)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "job not found")
 		return
 	}
-
+	if !(existing.Stage == "completed" && req.Stage == "invoiced") {
+		writeError(w, http.StatusForbidden, "admins can only move a completed job to invoiced")
+		return
+	}
 	job, err := h.crm.AdvanceStage(r.Context(), id, req)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to advance stage")

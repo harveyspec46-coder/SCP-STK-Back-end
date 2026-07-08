@@ -121,6 +121,7 @@ type CreateJobRequest struct {
 	Price          float64    `json:"price"`
 	EstimatedHours float64    `json:"estimated_hours"`
 	Notes          string     `json:"notes"`
+	AssignedTo     []string   `json:"assigned_to"`
 }
 
 type UpdateJobRequest struct {
