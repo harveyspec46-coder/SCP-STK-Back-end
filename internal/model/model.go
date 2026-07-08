@@ -259,10 +259,9 @@ type LogHoursRequest struct {
 type PayrollEntry struct {
 	UserID     string     `json:"user_id"`
 	User       *User      `json:"user,omitempty"`
-	Period     string     `json:"period"` // human-readable label, e.g. "Jun 29 – Jul 28, 2026"
-	JobCount   int        `json:"job_count"`
-	TotalHours float64    `json:"total_hours"`
-	HourlyRate float64    `json:"hourly_rate"`
+	Period     string     `json:"period"` // human-readable label, e.g. "July 2026"
+	TotalHours float64    `json:"total_hours"` // manually entered by admin
+	HourlyRate float64    `json:"hourly_rate"` // manually entered by admin
 	GrossPay   float64    `json:"gross_pay"`
 	Adjustment float64    `json:"adjustment"`
 	NetPay     float64    `json:"net_pay"`
@@ -277,11 +276,66 @@ type AdjustPayRequest struct {
 }
 
 type FinanceSummary struct {
-	Period          string  `json:"period"` // human-readable label, e.g. "Jun 29 – Jul 28, 2026"
+	Period          string  `json:"period"` // human-readable label, e.g. "July 2026"
 	InvoicedRevenue float64 `json:"invoiced_revenue"`
 	PipelineValue   float64 `json:"pipeline_value"`
 	TotalJobs       int     `json:"total_jobs"`
 	PayrollDue      float64 `json:"payroll_due"`
+	OtherRevenue    float64 `json:"other_revenue"`
+	OtherExpenses   float64 `json:"other_expenses"`
+}
+
+// ─── Job Payments & Ledger (manual finance entry) ──────────────────────────────
+
+type JobPayment struct {
+	ID         string    `json:"id"`
+	JobID      string    `json:"job_id"`
+	Amount     float64   `json:"amount"`
+	ReceiptURL string    `json:"receipt_url,omitempty"`
+	EnteredBy  string    `json:"entered_by,omitempty"`
+	EnteredAt  time.Time `json:"entered_at"`
+}
+
+type LogJobPaymentRequest struct {
+	Amount     float64 `json:"amount"`
+	ReceiptURL string  `json:"receipt_url"`
+}
+
+// JobRevenueRow is a job + its logged payment (if any), for the Workforce
+// Revenue Overview tab — only completed/invoiced jobs appear here.
+type JobRevenueRow struct {
+	JobID         string     `json:"job_id"`
+	ServiceType   string     `json:"service_type"`
+	Address       string     `json:"address"`
+	ClientName    string     `json:"client_name"`
+	Stage         JobStage   `json:"stage"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	PaymentAmount *float64   `json:"payment_amount,omitempty"`
+	ReceiptURL    *string    `json:"receipt_url,omitempty"`
+}
+
+type LedgerEntry struct {
+	ID         string    `json:"id"`
+	EntryType  string    `json:"entry_type"` // "revenue" | "expense"
+	Description string   `json:"description"`
+	Amount     float64   `json:"amount"`
+	ReceiptURL string    `json:"receipt_url,omitempty"`
+	EntryDate  time.Time `json:"entry_date"`
+	EnteredBy  string    `json:"entered_by,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type CreateLedgerEntryRequest struct {
+	EntryType   string  `json:"entry_type"`
+	Description string  `json:"description"`
+	Amount      float64 `json:"amount"`
+	ReceiptURL  string  `json:"receipt_url"`
+	EntryDate   string  `json:"entry_date"` // "2026-07-06"
+}
+
+type SetPayrollManualRequest struct {
+	Hours float64 `json:"hours"`
+	Rate  float64 `json:"rate"`
 }
 
 // ─── Voting ───────────────────────────────────────────────────────────────────

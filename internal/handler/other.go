@@ -283,6 +283,90 @@ func (h *FinanceHandler) LogPayment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, model.Response{Data: entry, Message: "payment logged"})
 }
 
+// POST /api/crm/jobs/:id/payment — admin only; log/update the payment for a completed/invoiced job
+func (h *FinanceHandler) LogJobPayment(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "id")
+	var req model.LogJobPaymentRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	user := auth.GetUser(r.Context())
+	entry, err := h.repo.LogJobPayment(r.Context(), jobID, user.ID, req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to log payment")
+		return
+	}
+	writeJSON(w, http.StatusOK, model.Response{Data: entry, Message: "payment logged"})
+}
+
+// GET /api/finance/job-revenue — admin only; completed/invoiced jobs + their logged payment
+func (h *FinanceHandler) ListJobRevenue(w http.ResponseWriter, r *http.Request) {
+	rows, err := h.repo.ListJobRevenue(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list job revenue")
+		return
+	}
+	writeJSON(w, http.StatusOK, model.Response{Data: rows, Total: len(rows)})
+}
+
+// GET /api/finance/ledger — admin only; current month's other revenue/expenses
+func (h *FinanceHandler) ListLedger(w http.ResponseWriter, r *http.Request) {
+	start, end, _ := repository.CurrentMonthPeriod()
+	entries, err := h.repo.ListLedger(r.Context(), start, end)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list ledger")
+		return
+	}
+	writeJSON(w, http.StatusOK, model.Response{Data: entries, Total: len(entries)})
+}
+
+// POST /api/finance/ledger — admin only
+func (h *FinanceHandler) CreateLedgerEntry(w http.ResponseWriter, r *http.Request) {
+	var req model.CreateLedgerEntryRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.EntryType != "revenue" && req.EntryType != "expense" {
+		writeError(w, http.StatusBadRequest, "entry_type must be revenue or expense")
+		return
+	}
+	user := auth.GetUser(r.Context())
+	entry, err := h.repo.CreateLedgerEntry(r.Context(), user.ID, req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create ledger entry")
+		return
+	}
+	writeJSON(w, http.StatusCreated, model.Response{Data: entry})
+}
+
+// DELETE /api/finance/ledger/:id — admin only
+func (h *FinanceHandler) DeleteLedgerEntry(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := h.repo.DeleteLedgerEntry(r.Context(), id); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to delete ledger entry")
+		return
+	}
+	writeJSON(w, http.StatusOK, model.Response{Message: "ledger entry deleted"})
+}
+
+// PATCH /api/payroll/:uid/hours — admin only; manual hours+rate entry for the month
+func (h *FinanceHandler) SetPayrollManual(w http.ResponseWriter, r *http.Request) {
+	uid := chi.URLParam(r, "uid")
+	var req model.SetPayrollManualRequest
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.repo.SetPayrollManual(r.Context(), uid, req); err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to set payroll hours")
+		return
+	}
+	entry, _ := h.repo.GetPayroll(r.Context(), uid)
+	writeJSON(w, http.StatusOK, model.Response{Data: entry, Message: "hours updated"})
+}
+
 // GET /api/finance/summary
 func (h *FinanceHandler) Summary(w http.ResponseWriter, r *http.Request) {
 	summary, err := h.repo.GetSummary(r.Context())

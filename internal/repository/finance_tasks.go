@@ -249,51 +249,40 @@ func NewFinanceRepo(db *pgxpool.Pool) *FinanceRepo {
 
 // CurrentPayPeriod returns the current custom pay cycle: the 29th of a month
 // through the 28th of the next month (org policy). end is exclusive.
-func CurrentPayPeriod() (start, end time.Time, label string) {
+// CurrentMonthPeriod returns the current calendar month (1st through the
+// last day, end exclusive) — org policy: monthly, not a custom cycle.
+func CurrentMonthPeriod() (start, end time.Time, label string) {
 	now := time.Now()
-	if now.Day() >= 29 {
-		start = time.Date(now.Year(), now.Month(), 29, 0, 0, 0, 0, now.Location())
-	} else {
-		prev := now.AddDate(0, -1, 0)
-		start = time.Date(prev.Year(), prev.Month(), 29, 0, 0, 0, 0, now.Location())
-	}
+	start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
 	end = start.AddDate(0, 1, 0)
-	label = start.Format("Jan 2") + " – " + end.AddDate(0, 0, -1).Format("Jan 2, 2006")
+	label = start.Format("January 2006")
 	return start, end, label
 }
 
-// GetPayroll calculates a staff member's pay for the current cycle. Hours
-// come from estimated_hours on jobs they're assigned to (not a separate
-// hours log) — this is the org's chosen source of truth for payroll hours.
+// GetPayroll returns a staff member's payroll for the current month. Hours
+// and rate are entered manually by the admin (SetPayrollManual) — there is
+// no automatic calculation from jobs.
 func (r *FinanceRepo) GetPayroll(ctx context.Context, userID string) (*model.PayrollEntry, error) {
-	start, end, label := CurrentPayPeriod()
+	_, _, label := CurrentMonthPeriod()
 
 	query := `
 		SELECT
 			u.id, u.full_name, u.role,
-			COALESCE(u.hourly_rate, 22.50) AS hourly_rate,
-			COALESCE(job_stats.job_count, 0) AS job_count,
-			COALESCE(job_stats.total_hours, 0) AS total_hours,
+			COALESCE(pa.hours, 0) AS hours,
+			COALESCE(pa.rate, u.hourly_rate, 22.50) AS rate,
 			COALESCE(pa.adjustment, 0) AS adjustment,
 			COALESCE(pa.paid, false) AS paid,
 			pa.paid_amount, pa.paid_at
 		FROM users u
-		LEFT JOIN (
-			SELECT a.user_id, COUNT(*) AS job_count, SUM(j.estimated_hours) AS total_hours
-			FROM crm_job_assignments a
-			JOIN crm_jobs j ON j.id = a.job_id
-			WHERE j.scheduled_at >= $2 AND j.scheduled_at < $3
-			GROUP BY a.user_id
-		) job_stats ON job_stats.user_id = u.id
-		LEFT JOIN payroll_adjustments pa ON pa.user_id = u.id AND pa.period = $4
+		LEFT JOIN payroll_adjustments pa ON pa.user_id = u.id AND pa.period = $2
 		WHERE u.id = $1`
 
 	var p model.PayrollEntry
 	var user model.User
 	p.User = &user
-	err := r.db.QueryRow(ctx, query, userID, start, end, label).Scan(
+	err := r.db.QueryRow(ctx, query, userID, label).Scan(
 		&user.ID, &user.FullName, &user.Role,
-		&p.HourlyRate, &p.JobCount, &p.TotalHours, &p.Adjustment,
+		&p.TotalHours, &p.HourlyRate, &p.Adjustment,
 		&p.Paid, &p.PaidAmount, &p.PaidAt,
 	)
 	if err != nil {
@@ -306,7 +295,20 @@ func (r *FinanceRepo) GetPayroll(ctx context.Context, userID string) (*model.Pay
 	return &p, nil
 }
 
-// ListPayrollForAllStaff returns the current cycle's payroll for every
+// SetPayrollManual records the admin's manual hours/rate entry for a staff
+// member for the current month.
+func (r *FinanceRepo) SetPayrollManual(ctx context.Context, userID string, req model.SetPayrollManualRequest) error {
+	_, _, label := CurrentMonthPeriod()
+	query := `
+		INSERT INTO payroll_adjustments (id, user_id, period, hours, rate, adjustment, reason)
+		VALUES ($1,$2,$3,$4,$5,0,'')
+		ON CONFLICT (user_id, period) DO UPDATE
+		SET hours = EXCLUDED.hours, rate = EXCLUDED.rate`
+	_, err := r.db.Exec(ctx, query, uuid.New().String(), userID, label, req.Hours, req.Rate)
+	return err
+}
+
+// ListPayrollForAllStaff returns the current month's payroll for every
 // staff-role user, for the Payroll tab.
 func (r *FinanceRepo) ListPayrollForAllStaff(ctx context.Context) ([]model.PayrollEntry, error) {
 	rows, err := r.db.Query(ctx, `SELECT id FROM users WHERE role = 'staff'`)
@@ -336,7 +338,7 @@ func (r *FinanceRepo) ListPayrollForAllStaff(ctx context.Context) ([]model.Payro
 }
 
 func (r *FinanceRepo) AdjustPay(ctx context.Context, userID string, req model.AdjustPayRequest) error {
-	_, _, label := CurrentPayPeriod()
+	_, _, label := CurrentMonthPeriod()
 	query := `
 		INSERT INTO payroll_adjustments (id, user_id, period, adjustment, reason)
 		VALUES ($1,$2,$3,$4,$5)
@@ -346,11 +348,10 @@ func (r *FinanceRepo) AdjustPay(ctx context.Context, userID string, req model.Ad
 	return err
 }
 
-// LogPayment records that a staff member's current-cycle pay was actually
-// paid out (cash, etc), once an admin confirms it — separate from the
-// calculated net pay so partial/rounded real-world payments can be recorded.
+// LogPayment records that a staff member's current-month pay was actually
+// paid out (cash, etc), once an admin confirms it.
 func (r *FinanceRepo) LogPayment(ctx context.Context, userID string, amount float64) error {
-	_, _, label := CurrentPayPeriod()
+	_, _, label := CurrentMonthPeriod()
 	query := `
 		INSERT INTO payroll_adjustments (id, user_id, period, adjustment, reason, paid, paid_amount, paid_at)
 		VALUES ($1,$2,$3,0,'',true,$4,NOW())
@@ -360,33 +361,130 @@ func (r *FinanceRepo) LogPayment(ctx context.Context, userID string, amount floa
 	return err
 }
 
-// GetSummary computes Overview tab figures directly from crm_jobs for the
-// current pay cycle — invoiced revenue, pipeline value (everything else),
-// total jobs created, and total payroll due (unpaid) across all staff.
+// LogJobPayment records (or updates) the manually-entered payment amount +
+// receipt for a completed/invoiced job.
+func (r *FinanceRepo) LogJobPayment(ctx context.Context, jobID, enteredBy string, req model.LogJobPaymentRequest) (*model.JobPayment, error) {
+	query := `
+		INSERT INTO job_payments (id, job_id, amount, receipt_url, entered_by)
+		VALUES ($1,$2,$3,$4,$5)
+		ON CONFLICT (job_id) DO UPDATE
+		SET amount = EXCLUDED.amount, receipt_url = EXCLUDED.receipt_url,
+		    entered_by = EXCLUDED.entered_by, entered_at = NOW()
+		RETURNING id, job_id, amount, receipt_url, entered_by, entered_at`
+	var p model.JobPayment
+	err := r.db.QueryRow(ctx, query, uuid.New().String(), jobID, req.Amount, req.ReceiptURL, enteredBy).
+		Scan(&p.ID, &p.JobID, &p.Amount, &p.ReceiptURL, &p.EnteredBy, &p.EnteredAt)
+	if err != nil {
+		return nil, fmt.Errorf("log job payment: %w", err)
+	}
+	return &p, nil
+}
+
+// ListJobRevenue returns completed/invoiced jobs with their logged payment
+// (if any), for the Workforce Revenue Overview tab.
+func (r *FinanceRepo) ListJobRevenue(ctx context.Context) ([]model.JobRevenueRow, error) {
+	query := `
+		SELECT j.id, j.service_type, j.address, c.full_name, j.stage, j.completed_at,
+		       jp.amount, jp.receipt_url
+		FROM crm_jobs j
+		JOIN crm_clients c ON c.id = j.client_id
+		LEFT JOIN job_payments jp ON jp.job_id = j.id
+		WHERE j.stage IN ('completed', 'invoiced')
+		ORDER BY j.completed_at DESC NULLS LAST`
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.JobRevenueRow
+	for rows.Next() {
+		var row model.JobRevenueRow
+		if err := rows.Scan(&row.JobID, &row.ServiceType, &row.Address, &row.ClientName,
+			&row.Stage, &row.CompletedAt, &row.PaymentAmount, &row.ReceiptURL); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, nil
+}
+
+// ─── Finance ledger (other revenue / expenses, outside job work) ──────────────
+
+func (r *FinanceRepo) ListLedger(ctx context.Context, start, end time.Time) ([]model.LedgerEntry, error) {
+	query := `
+		SELECT id, entry_type, description, amount, receipt_url, entry_date, entered_by, created_at
+		FROM finance_ledger
+		WHERE entry_date >= $1 AND entry_date < $2
+		ORDER BY entry_date DESC`
+	rows, err := r.db.Query(ctx, query, start, end)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []model.LedgerEntry
+	for rows.Next() {
+		var e model.LedgerEntry
+		if err := rows.Scan(&e.ID, &e.EntryType, &e.Description, &e.Amount,
+			&e.ReceiptURL, &e.EntryDate, &e.EnteredBy, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+func (r *FinanceRepo) CreateLedgerEntry(ctx context.Context, enteredBy string, req model.CreateLedgerEntryRequest) (*model.LedgerEntry, error) {
+	entryDate, err := time.Parse("2006-01-02", req.EntryDate)
+	if err != nil {
+		entryDate = time.Now()
+	}
+	query := `
+		INSERT INTO finance_ledger (id, entry_type, description, amount, receipt_url, entry_date, entered_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		RETURNING id, entry_type, description, amount, receipt_url, entry_date, entered_by, created_at`
+	var e model.LedgerEntry
+	err = r.db.QueryRow(ctx, query, uuid.New().String(), req.EntryType, req.Description,
+		req.Amount, req.ReceiptURL, entryDate, enteredBy).
+		Scan(&e.ID, &e.EntryType, &e.Description, &e.Amount, &e.ReceiptURL, &e.EntryDate, &e.EnteredBy, &e.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("create ledger entry: %w", err)
+	}
+	return &e, nil
+}
+
+func (r *FinanceRepo) DeleteLedgerEntry(ctx context.Context, id string) error {
+	_, err := r.db.Exec(ctx, `DELETE FROM finance_ledger WHERE id=$1`, id)
+	return err
+}
+
+// GetSummary computes Overview figures for the current calendar month:
+// invoiced revenue + pipeline value from manually-logged job payments,
+// total jobs created, payroll due, and other ledger revenue/expenses.
 func (r *FinanceRepo) GetSummary(ctx context.Context) (*model.FinanceSummary, error) {
-	start, end, label := CurrentPayPeriod()
+	start, end, label := CurrentMonthPeriod()
 	var s model.FinanceSummary
 	s.Period = label
 
 	err := r.db.QueryRow(ctx, `
-		SELECT COALESCE(SUM(price), 0) FROM crm_jobs
-		WHERE stage = 'invoiced' AND scheduled_at >= $1 AND scheduled_at < $2`,
+		SELECT COALESCE(SUM(jp.amount), 0)
+		FROM crm_jobs j JOIN job_payments jp ON jp.job_id = j.id
+		WHERE j.stage = 'invoiced' AND jp.entered_at >= $1 AND jp.entered_at < $2`,
 		start, end).Scan(&s.InvoicedRevenue)
 	if err != nil {
 		return nil, fmt.Errorf("invoiced revenue: %w", err)
 	}
 
 	err = r.db.QueryRow(ctx, `
-		SELECT COALESCE(SUM(price), 0) FROM crm_jobs
-		WHERE stage != 'invoiced' AND scheduled_at >= $1 AND scheduled_at < $2`,
+		SELECT COALESCE(SUM(jp.amount), 0)
+		FROM crm_jobs j JOIN job_payments jp ON jp.job_id = j.id
+		WHERE j.stage = 'completed' AND jp.entered_at >= $1 AND jp.entered_at < $2`,
 		start, end).Scan(&s.PipelineValue)
 	if err != nil {
 		return nil, fmt.Errorf("pipeline value: %w", err)
 	}
 
 	err = r.db.QueryRow(ctx, `
-		SELECT COUNT(*) FROM crm_jobs
-		WHERE created_at >= $1 AND created_at < $2`,
+		SELECT COUNT(*) FROM crm_jobs WHERE created_at >= $1 AND created_at < $2`,
 		start, end).Scan(&s.TotalJobs)
 	if err != nil {
 		return nil, fmt.Errorf("total jobs: %w", err)
@@ -397,6 +495,17 @@ func (r *FinanceRepo) GetSummary(ctx context.Context) (*model.FinanceSummary, er
 		for _, p := range payrolls {
 			if !p.Paid {
 				s.PayrollDue += p.NetPay
+			}
+		}
+	}
+
+	ledger, err := r.ListLedger(ctx, start, end)
+	if err == nil {
+		for _, e := range ledger {
+			if e.EntryType == "revenue" {
+				s.OtherRevenue += e.Amount
+			} else {
+				s.OtherExpenses += e.Amount
 			}
 		}
 	}

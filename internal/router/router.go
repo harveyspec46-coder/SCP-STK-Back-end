@@ -85,9 +85,17 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 				r.Patch("/{id}/reschedule", h.CRM.RescheduleJob)
 				r.Delete("/{id}/assign/{uid}", h.CRM.RemoveAssignment)
 				r.Post("/{id}/tasks", h.CRM.CreateJobTask)
+				r.Post("/{id}/payment", h.Finance.LogJobPayment)
 			})
 
 			r.Get("/crm/staff/{uid}/workload", h.CRM.StaffWorkload)
+			r.Get("/finance/job-revenue", h.Finance.ListJobRevenue)
+			r.Route("/finance/ledger", func(r chi.Router) {
+				r.Get("/", h.Finance.ListLedger)
+				r.Post("/", h.Finance.CreateLedgerEntry)
+				r.Delete("/{id}", h.Finance.DeleteLedgerEntry)
+			})
+			r.Patch("/payroll/{uid}/hours", h.Finance.SetPayrollManual)
 		})
 
 		// ── My Jobs — any authenticated user (staff included); only ever
