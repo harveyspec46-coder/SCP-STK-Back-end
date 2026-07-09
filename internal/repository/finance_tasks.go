@@ -280,13 +280,17 @@ func (r *FinanceRepo) GetPayroll(ctx context.Context, userID string) (*model.Pay
 	var p model.PayrollEntry
 	var user model.User
 	p.User = &user
+	var paidAmount *float64
 	err := r.db.QueryRow(ctx, query, userID, label).Scan(
 		&user.ID, &user.FullName, &user.Role,
 		&p.TotalHours, &p.HourlyRate, &p.Adjustment,
-		&p.Paid, &p.PaidAmount, &p.PaidAt,
+		&p.Paid, &paidAmount, &p.PaidAt,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("get payroll: %w", err)
+	}
+	if paidAmount != nil {
+		p.PaidAmount = *paidAmount
 	}
 	p.UserID = userID
 	p.Period = label
