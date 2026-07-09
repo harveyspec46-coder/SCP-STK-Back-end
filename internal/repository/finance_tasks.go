@@ -267,7 +267,7 @@ func (r *FinanceRepo) GetPayroll(ctx context.Context, userID string) (*model.Pay
 
 	query := `
 		SELECT
-			u.id, u.full_name, u.role,
+			u.id, u.full_name, u.role, u.display_id,
 			COALESCE(pa.hours, 0) AS hours,
 			COALESCE(pa.rate, u.hourly_rate, 22.50) AS rate,
 			COALESCE(pa.adjustment, 0) AS adjustment,
@@ -276,13 +276,13 @@ func (r *FinanceRepo) GetPayroll(ctx context.Context, userID string) (*model.Pay
 		FROM users u
 		LEFT JOIN payroll_adjustments pa ON pa.user_id = u.id AND pa.period = $2
 		WHERE u.id = $1`
-
 	var p model.PayrollEntry
 	var user model.User
 	p.User = &user
 	var paidAmount *float64
+	var displayID *string
 	err := r.db.QueryRow(ctx, query, userID, label).Scan(
-		&user.ID, &user.FullName, &user.Role,
+		&user.ID, &user.FullName, &user.Role, &displayID,
 		&p.TotalHours, &p.HourlyRate, &p.Adjustment,
 		&p.Paid, &paidAmount, &p.PaidAt,
 	)
@@ -291,6 +291,9 @@ func (r *FinanceRepo) GetPayroll(ctx context.Context, userID string) (*model.Pay
 	}
 	if paidAmount != nil {
 		p.PaidAmount = *paidAmount
+	}
+	if displayID != nil {
+		user.DisplayID = *displayID
 	}
 	p.UserID = userID
 	p.Period = label
