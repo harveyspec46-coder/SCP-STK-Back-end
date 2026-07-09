@@ -234,18 +234,26 @@ func (r *CRMRepo) UpdateJob(ctx context.Context, id string, req model.UpdateJobR
 
 // AdvanceStage moves a job through the funnel and records timestamps.
 func (r *CRMRepo) AdvanceStage(ctx context.Context, jobID string, req model.AdvanceStageRequest) (*model.Job, error) {
-	// Set the relevant timestamp column based on new stage
-	var query string
+	// Each branch's Exec call only passes the parameters its own query text
+	// actually references — passing an extra unused placeholder (e.g. $2
+	// never appearing in the SQL) causes Postgres to reject the query since
+	// it can't infer that parameter's type.
+	var err error
 	switch req.Stage {
 	case model.StageArrived:
-		query = `UPDATE crm_jobs SET stage=$1, arrived_at=COALESCE($2, NOW()) WHERE id=$3`
+		_, err = r.db.Exec(ctx,
+			`UPDATE crm_jobs SET stage=$1, arrived_at=COALESCE($2, NOW()) WHERE id=$3`,
+			req.Stage, req.Timestamp, jobID)
 	case model.StageCompleted:
-		query = `UPDATE crm_jobs SET stage=$1, completed_at=COALESCE($2, NOW()) WHERE id=$3`
+		_, err = r.db.Exec(ctx,
+			`UPDATE crm_jobs SET stage=$1, completed_at=COALESCE($2, NOW()) WHERE id=$3`,
+			req.Stage, req.Timestamp, jobID)
 	default:
-		query = `UPDATE crm_jobs SET stage=$1 WHERE id=$3`
+		_, err = r.db.Exec(ctx,
+			`UPDATE crm_jobs SET stage=$1 WHERE id=$2`,
+			req.Stage, jobID)
 	}
-
-	if _, err := r.db.Exec(ctx, query, req.Stage, req.Timestamp, jobID); err != nil {
+	if err != nil {
 		return nil, fmt.Errorf("advance stage: %w", err)
 	}
 	return r.GetJob(ctx, jobID)
