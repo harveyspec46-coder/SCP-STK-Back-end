@@ -49,6 +49,7 @@ type Participant struct {
 	Type          ParticipantType `json:"type"`
 	FullName      string          `json:"full_name"`
 	Phone         string          `json:"phone,omitempty"`
+	City          string          `json:"city,omitempty"`
 	ProgramID     *string         `json:"program_id,omitempty"`
 	ProgramName   string          `json:"program_name,omitempty"`
 	Stage         string          `json:"stage"`
@@ -64,6 +65,7 @@ type CreateParticipantRequest struct {
 	Type          ParticipantType `json:"type"`
 	FullName      string          `json:"full_name"`
 	Phone         string          `json:"phone"`
+	City          string          `json:"city"`
 	ProgramID     *string         `json:"program_id"`
 	HousingStatus string          `json:"housing_status"`
 	Language      string          `json:"language"`
@@ -74,6 +76,31 @@ type CreateParticipantRequest struct {
 
 type AdvanceParticipantStageRequest struct {
 	Stage string `json:"stage"`
+}
+
+// ─── Program Ledger (people helped by a program — separate from Participants) ──
+
+type ProgramLedgerEntry struct {
+	ID         string    `json:"id"`
+	FullName   string    `json:"full_name"`
+	Phone      string    `json:"phone,omitempty"`
+	Address    string    `json:"address,omitempty"`
+	HelpNeeded string    `json:"help_needed,omitempty"`
+	HelpedOn   time.Time `json:"helped_on"`
+	Notes      string    `json:"notes,omitempty"`
+	CreatedBy  string    `json:"created_by,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	ProgramIDs []string  `json:"program_ids,omitempty"`
+}
+
+type CreateProgramLedgerRequest struct {
+	FullName   string   `json:"full_name"`
+	Phone      string   `json:"phone"`
+	Address    string   `json:"address"`
+	HelpNeeded string   `json:"help_needed"`
+	HelpedOn   string   `json:"helped_on"` // "2026-07-08"
+	Notes      string   `json:"notes"`
+	ProgramIDs []string `json:"program_ids"`
 }
 
 // ─── MOUs & Contracts ──────────────────────────────────────────────────────

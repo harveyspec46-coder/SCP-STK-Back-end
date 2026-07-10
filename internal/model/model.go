@@ -198,13 +198,29 @@ type TaskAttachment struct {
 // ─── Program ──────────────────────────────────────────────────────────────────
 
 type Program struct {
-	ID           string     `json:"id"`
-	Name         string     `json:"name"`
-	Sub          string     `json:"sub"`
-	Office       string     `json:"office"` // north | south | both
-	Active       bool       `json:"active"`
-	Participants int        `json:"participants,omitempty"`
-	Documents    []Document `json:"documents,omitempty"`
+	ID            string     `json:"id"`
+	Name          string     `json:"name"`
+	Sub           string     `json:"sub"`
+	Office        string     `json:"office"` // north | south | both
+	Icon          string     `json:"icon"`
+	Active        bool       `json:"active"`
+	CreatedAt     time.Time  `json:"created_at"`
+	Participants  int        `json:"participants,omitempty"`
+	DocumentCount int        `json:"document_count,omitempty"`
+	Documents     []Document `json:"documents,omitempty"`
+}
+
+type CreateProgramRequest struct {
+	Name   string `json:"name"`
+	Sub    string `json:"sub"`
+	Office string `json:"office"`
+	Icon   string `json:"icon"`
+}
+
+type CreateDocumentRequest struct {
+	Name     string `json:"name"`
+	URL      string `json:"url"`
+	FileType string `json:"file_type"`
 }
 
 type Document struct {

@@ -40,6 +40,8 @@ func main() {
 
 	adminRepo := repository.NewAdminRepo(pool)
 	participantRepo := repository.NewParticipantRepo(pool)
+	programRepo := repository.NewProgramRepo(pool)
+	programLedgerRepo := repository.NewProgramLedgerRepo(pool)
 	mouRepo := repository.NewMOURepo(pool)
 	resourceRepo := repository.NewResourceRepo(pool)
 	workshopRepo := repository.NewWorkshopRepo(pool)
@@ -57,7 +59,9 @@ func main() {
 		Notifications: handler.NewNotificationHandler(notifRepo),
 
 		Admin:        handler.NewAdminHandler(adminRepo, auditRepo),
-		Participants: handler.NewParticipantHandler(participantRepo, auditRepo),
+		Participants:  handler.NewParticipantHandler(participantRepo, auditRepo),
+		Programs:      handler.NewProgramHandler(programRepo),
+		ProgramLedger: handler.NewProgramLedgerHandler(programLedgerRepo),
 		MOUs:         handler.NewMOUHandler(mouRepo, auditRepo),
 		Resources:    handler.NewResourceHandler(resourceRepo),
 		Workshops:    handler.NewWorkshopHandler(workshopRepo),

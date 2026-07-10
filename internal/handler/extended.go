@@ -103,6 +103,107 @@ func (h *AdminHandler) AssignDisplayID(w http.ResponseWriter, r *http.Request) {
 // Participants & Volunteers
 // ════════════════════════════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════════════════════════════
+// Programs & Documents
+// ════════════════════════════════════════════════════════════════════════════
+
+type ProgramHandler struct {
+	repo *repository.ProgramRepo
+}
+
+func NewProgramHandler(repo *repository.ProgramRepo) *ProgramHandler {
+	return &ProgramHandler{repo: repo}
+}
+
+// GET /api/programs
+func (h *ProgramHandler) List(w http.ResponseWriter, r *http.Request) {
+	programs, err := h.repo.List(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list programs")
+		return
+	}
+	writeJSON(w, http.StatusOK, model.Response{Data: programs, Total: len(programs)})
+}
+
+// POST /api/programs
+func (h *ProgramHandler) Create(w http.ResponseWriter, r *http.Request) {
+	var req model.CreateProgramRequest
+	if err := decode(r, &req); err != nil || req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	program, err := h.repo.Create(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to create program")
+		return
+	}
+	writeJSON(w, http.StatusCreated, model.Response{Data: program})
+}
+
+// GET /api/programs/:id/documents
+func (h *ProgramHandler) ListDocuments(w http.ResponseWriter, r *http.Request) {
+	programID := chi.URLParam(r, "id")
+	docs, err := h.repo.ListDocuments(r.Context(), programID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list documents")
+		return
+	}
+	writeJSON(w, http.StatusOK, model.Response{Data: docs, Total: len(docs)})
+}
+
+// POST /api/programs/:id/documents
+func (h *ProgramHandler) CreateDocument(w http.ResponseWriter, r *http.Request) {
+	programID := chi.URLParam(r, "id")
+	var req model.CreateDocumentRequest
+	if err := decode(r, &req); err != nil || req.Name == "" || req.URL == "" {
+		writeError(w, http.StatusBadRequest, "name and url are required")
+		return
+	}
+	user := auth.GetUser(r.Context())
+	doc, err := h.repo.CreateDocument(r.Context(), programID, user.ID, req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to add document")
+		return
+	}
+	writeJSON(w, http.StatusCreated, model.Response{Data: doc})
+}
+
+
+type ProgramLedgerHandler struct {
+	repo *repository.ProgramLedgerRepo
+}
+
+func NewProgramLedgerHandler(repo *repository.ProgramLedgerRepo) *ProgramLedgerHandler {
+	return &ProgramLedgerHandler{repo: repo}
+}
+
+// GET /api/programs/:id/ledger
+func (h *ProgramLedgerHandler) List(w http.ResponseWriter, r *http.Request) {
+	programID := chi.URLParam(r, "id")
+	entries, err := h.repo.ListByProgram(r.Context(), programID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to list ledger")
+		return
+	}
+	writeJSON(w, http.StatusOK, model.Response{Data: entries, Total: len(entries)})
+}
+
+// POST /api/program-ledger
+func (h *ProgramLedgerHandler) Create(w http.ResponseWriter, r *http.Request) {
+	var req model.CreateProgramLedgerRequest
+	if err := decode(r, &req); err != nil || req.FullName == "" {
+		writeError(w, http.StatusBadRequest, "full_name is required")
+		return
+	}
+	user := auth.GetUser(r.Context())
+	entry, err := h.repo.Create(r.Context(), user.ID, req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to add ledger entry")
+		return
+	}
+	writeJSON(w, http.StatusCreated, model.Response{Data: entry})
+}
+
 type ParticipantHandler struct {
 	repo  *repository.ParticipantRepo
 	audit *repository.AuditRepo

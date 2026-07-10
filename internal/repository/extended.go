@@ -102,6 +102,100 @@ func (r *AdminRepo) AssignDisplayID(ctx context.Context, userID, displayID strin
 // Participants & Volunteers
 // ════════════════════════════════════════════════════════════════════════════
 
+// ════════════════════════════════════════════════════════════════════════════
+// Programs & Documents
+// ════════════════════════════════════════════════════════════════════════════
+
+type ProgramRepo struct {
+	db *pgxpool.Pool
+}
+
+func NewProgramRepo(db *pgxpool.Pool) *ProgramRepo {
+	return &ProgramRepo{db: db}
+}
+
+func (r *ProgramRepo) List(ctx context.Context) ([]model.Program, error) {
+	query := `
+		SELECT p.id, p.name, p.sub, p.office, p.icon, p.active, p.created_at,
+		       COALESCE(d.doc_count, 0) AS document_count
+		FROM programs p
+		LEFT JOIN (
+			SELECT program_id, COUNT(*) AS doc_count FROM documents GROUP BY program_id
+		) d ON d.program_id = p.id
+		ORDER BY p.created_at ASC`
+	rows, err := r.db.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("list programs: %w", err)
+	}
+	defer rows.Close()
+	var out []model.Program
+	for rows.Next() {
+		var p model.Program
+		if err := rows.Scan(&p.ID, &p.Name, &p.Sub, &p.Office, &p.Icon, &p.Active, &p.CreatedAt, &p.DocumentCount); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+func (r *ProgramRepo) Create(ctx context.Context, req model.CreateProgramRequest) (*model.Program, error) {
+	office := req.Office
+	if office == "" {
+		office = "both"
+	}
+	icon := req.Icon
+	if icon == "" {
+		icon = "🌟"
+	}
+	query := `
+		INSERT INTO programs (id, name, sub, office, icon, active)
+		VALUES ($1,$2,$3,$4,$5,true)
+		RETURNING id, name, sub, office, icon, active, created_at`
+	var p model.Program
+	err := r.db.QueryRow(ctx, query, uuid.New().String(), req.Name, req.Sub, office, icon).
+		Scan(&p.ID, &p.Name, &p.Sub, &p.Office, &p.Icon, &p.Active, &p.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("create program: %w", err)
+	}
+	return &p, nil
+}
+
+func (r *ProgramRepo) ListDocuments(ctx context.Context, programID string) ([]model.Document, error) {
+	query := `
+		SELECT id, program_id, name, url, file_type, COALESCE(uploaded_by::text, ''), created_at
+		FROM documents WHERE program_id = $1
+		ORDER BY created_at DESC`
+	rows, err := r.db.Query(ctx, query, programID)
+	if err != nil {
+		return nil, fmt.Errorf("list documents: %w", err)
+	}
+	defer rows.Close()
+	var out []model.Document
+	for rows.Next() {
+		var d model.Document
+		if err := rows.Scan(&d.ID, &d.ProgramID, &d.Name, &d.URL, &d.FileType, &d.UploadedBy, &d.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, nil
+}
+
+func (r *ProgramRepo) CreateDocument(ctx context.Context, programID, uploadedBy string, req model.CreateDocumentRequest) (*model.Document, error) {
+	query := `
+		INSERT INTO documents (id, program_id, name, url, file_type, uploaded_by)
+		VALUES ($1,$2,$3,$4,$5,$6)
+		RETURNING id, program_id, name, url, file_type, COALESCE(uploaded_by::text, ''), created_at`
+	var d model.Document
+	err := r.db.QueryRow(ctx, query, uuid.New().String(), programID, req.Name, req.URL, req.FileType, uploadedBy).
+		Scan(&d.ID, &d.ProgramID, &d.Name, &d.URL, &d.FileType, &d.UploadedBy, &d.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("create document: %w", err)
+	}
+	return &d, nil
+}
+
 type ParticipantRepo struct {
 	db *pgxpool.Pool
 }
@@ -113,7 +207,7 @@ func NewParticipantRepo(db *pgxpool.Pool) *ParticipantRepo {
 func (r *ParticipantRepo) List(ctx context.Context, typeFilter, search string) ([]model.Participant, error) {
 	query := `
 		SELECT p.id, p.display_id, p.type, p.full_name, COALESCE(p.phone,''),
-		       p.program_id, COALESCE(pr.name,''), p.stage, p.assigned_staff,
+		       COALESCE(p.city,''), p.program_id, COALESCE(pr.name,''), p.stage, p.assigned_staff,
 		       COALESCE(p.housing_status,''), COALESCE(p.language,'English'),
 		       p.intake_mode, COALESCE(p.notes,''), p.created_at
 		FROM participants p
@@ -129,7 +223,7 @@ func (r *ParticipantRepo) List(ctx context.Context, typeFilter, search string) (
 	var out []model.Participant
 	for rows.Next() {
 		var p model.Participant
-		if err := rows.Scan(&p.ID, &p.DisplayID, &p.Type, &p.FullName, &p.Phone,
+		if err := rows.Scan(&p.ID, &p.DisplayID, &p.Type, &p.FullName, &p.Phone, &p.City,
 			&p.ProgramID, &p.ProgramName, &p.Stage, &p.AssignedStaff,
 			&p.HousingStatus, &p.Language, &p.IntakeMode, &p.Notes, &p.CreatedAt); err != nil {
 			return nil, err
@@ -155,16 +249,16 @@ func (r *ParticipantRepo) Create(ctx context.Context, req model.CreateParticipan
 	}
 	query := `
 		INSERT INTO participants
-			(id, type, full_name, phone, program_id, stage, assigned_staff,
+			(id, type, full_name, phone, city, program_id, stage, assigned_staff,
 			 housing_status, language, intake_mode, notes)
-		VALUES ($1,$2,$3,$4,$5,'Intake',$6,$7,$8,$9,$10)
-		RETURNING id, display_id, type, full_name, COALESCE(phone,''), program_id,
+		VALUES ($1,$2,$3,$4,$5,$6,'Intake',$7,$8,$9,$10,$11)
+		RETURNING id, display_id, type, full_name, COALESCE(phone,''), COALESCE(city,''), program_id,
 		          stage, assigned_staff, COALESCE(housing_status,''),
 		          COALESCE(language,'English'), intake_mode, COALESCE(notes,''), created_at`
 	var p model.Participant
-	err := r.db.QueryRow(ctx, query, id, pType, req.FullName, req.Phone, req.ProgramID,
+	err := r.db.QueryRow(ctx, query, id, pType, req.FullName, req.Phone, req.City, req.ProgramID,
 		req.AssignedStaff, req.HousingStatus, lang, mode, req.Notes).
-		Scan(&p.ID, &p.DisplayID, &p.Type, &p.FullName, &p.Phone, &p.ProgramID,
+		Scan(&p.ID, &p.DisplayID, &p.Type, &p.FullName, &p.Phone, &p.City, &p.ProgramID,
 			&p.Stage, &p.AssignedStaff, &p.HousingStatus, &p.Language, &p.IntakeMode,
 			&p.Notes, &p.CreatedAt)
 	if err != nil {
@@ -176,6 +270,77 @@ func (r *ParticipantRepo) Create(ctx context.Context, req model.CreateParticipan
 func (r *ParticipantRepo) AdvanceStage(ctx context.Context, id, stage string) error {
 	_, err := r.db.Exec(ctx, `UPDATE participants SET stage = $1 WHERE id = $2`, stage, id)
 	return err
+}
+
+
+// ════════════════════════════════════════════════════════════════════════════
+// Program Ledger — people helped by a program (separate from Participants)
+// ════════════════════════════════════════════════════════════════════════════
+
+type ProgramLedgerRepo struct {
+	db *pgxpool.Pool
+}
+
+func NewProgramLedgerRepo(db *pgxpool.Pool) *ProgramLedgerRepo {
+	return &ProgramLedgerRepo{db: db}
+}
+
+func (r *ProgramLedgerRepo) ListByProgram(ctx context.Context, programID string) ([]model.ProgramLedgerEntry, error) {
+	query := `
+		SELECT l.id, l.full_name, COALESCE(l.phone,''), COALESCE(l.address,''),
+		       COALESCE(l.help_needed,''), l.helped_on, COALESCE(l.notes,''),
+		       COALESCE(l.created_by::text,''), l.created_at
+		FROM program_ledger l
+		JOIN program_ledger_programs lp ON lp.ledger_id = l.id
+		WHERE lp.program_id = $1
+		ORDER BY l.helped_on DESC`
+	rows, err := r.db.Query(ctx, query, programID)
+	if err != nil {
+		return nil, fmt.Errorf("list program ledger: %w", err)
+	}
+	defer rows.Close()
+	var out []model.ProgramLedgerEntry
+	for rows.Next() {
+		var e model.ProgramLedgerEntry
+		if err := rows.Scan(&e.ID, &e.FullName, &e.Phone, &e.Address, &e.HelpNeeded,
+			&e.HelpedOn, &e.Notes, &e.CreatedBy, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+func (r *ProgramLedgerRepo) Create(ctx context.Context, createdBy string, req model.CreateProgramLedgerRequest) (*model.ProgramLedgerEntry, error) {
+	helpedOn, err := time.Parse("2006-01-02", req.HelpedOn)
+	if err != nil {
+		helpedOn = time.Now()
+	}
+	id := uuid.New().String()
+	query := `
+		INSERT INTO program_ledger (id, full_name, phone, address, help_needed, helped_on, notes, created_by)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		RETURNING id, full_name, COALESCE(phone,''), COALESCE(address,''),
+		          COALESCE(help_needed,''), helped_on, COALESCE(notes,''),
+		          COALESCE(created_by::text,''), created_at`
+	var e model.ProgramLedgerEntry
+	err = r.db.QueryRow(ctx, query, id, req.FullName, req.Phone, req.Address,
+		req.HelpNeeded, helpedOn, req.Notes, createdBy).
+		Scan(&e.ID, &e.FullName, &e.Phone, &e.Address, &e.HelpNeeded, &e.HelpedOn,
+			&e.Notes, &e.CreatedBy, &e.CreatedAt)
+	if err != nil {
+		return nil, fmt.Errorf("create program ledger entry: %w", err)
+	}
+	for _, pid := range req.ProgramIDs {
+		if pid == "" {
+			continue
+		}
+		_, _ = r.db.Exec(ctx,
+			`INSERT INTO program_ledger_programs (ledger_id, program_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`,
+			e.ID, pid)
+	}
+	e.ProgramIDs = req.ProgramIDs
+	return &e, nil
 }
 
 // ════════════════════════════════════════════════════════════════════════════

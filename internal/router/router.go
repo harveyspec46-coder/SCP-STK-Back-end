@@ -23,7 +23,9 @@ type Handlers struct {
 	// MOUs, resources, workshops, shift scheduling, the audit log, and
 	// in-app e-signatures.
 	Admin        *handler.AdminHandler
-	Participants *handler.ParticipantHandler
+	Participants  *handler.ParticipantHandler
+	Programs      *handler.ProgramHandler
+	ProgramLedger *handler.ProgramLedgerHandler
 	MOUs         *handler.MOUHandler
 	Resources    *handler.ResourceHandler
 	Workshops    *handler.WorkshopHandler
@@ -159,6 +161,16 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 			r.Post("/", h.Participants.Create)
 			r.Patch("/{id}/stage", h.Participants.AdvanceStage)
 		})
+				// ── Programs & Documents — board (admin + manager) ────────────────────
+				r.Route("/programs", func(r chi.Router) {
+					r.Use(auth.RequireRole("manager"))
+					r.Get("/", h.Programs.List)
+					r.Post("/", h.Programs.Create)
+					r.Get("/{id}/documents", h.Programs.ListDocuments)
+					r.Post("/{id}/documents", h.Programs.CreateDocument)
+					r.Get("/{id}/ledger", h.ProgramLedger.List)
+				})
+				r.Post("/program-ledger", h.ProgramLedger.Create)
 
 		// ── MOUs & Contracts — board ───────────────────────────────────────────
 		r.Route("/mous", func(r chi.Router) {
