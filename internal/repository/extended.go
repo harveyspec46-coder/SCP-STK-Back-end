@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/scp-stk/hub/internal/model"
 )
@@ -271,7 +270,6 @@ func (r *ParticipantRepo) AdvanceStage(ctx context.Context, id, stage string) er
 	_, err := r.db.Exec(ctx, `UPDATE participants SET stage = $1 WHERE id = $2`, stage, id)
 	return err
 }
-
 
 // ════════════════════════════════════════════════════════════════════════════
 // Program Ledger — people helped by a program (separate from Participants)
@@ -643,145 +641,4 @@ func (r *AuditRepo) List(ctx context.Context, moduleFilter, search string, limit
 		out = append(out, e)
 	}
 	return out, nil
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// E-Signatures
-// ════════════════════════════════════════════════════════════════════════════
-
-type ESignRepo struct {
-	db *pgxpool.Pool
-}
-
-func NewESignRepo(db *pgxpool.Pool) *ESignRepo {
-	return &ESignRepo{db: db}
-}
-
-func (r *ESignRepo) List(ctx context.Context) ([]model.ESignDocument, error) {
-	rows, err := r.db.Query(ctx,
-		`SELECT id, name, type, pages, clauses, status, created_by, created_at
-		 FROM esign_documents ORDER BY created_at DESC`)
-	if err != nil {
-		return nil, fmt.Errorf("list esign documents: %w", err)
-	}
-	defer rows.Close()
-
-	var docs []model.ESignDocument
-	for rows.Next() {
-		var d model.ESignDocument
-		if err := rows.Scan(&d.ID, &d.Name, &d.Type, &d.Pages, &d.Clauses,
-			&d.Status, &d.CreatedBy, &d.CreatedAt); err != nil {
-			return nil, err
-		}
-		docs = append(docs, d)
-	}
-
-	// Attach signers (one extra query per doc is fine at this volume; revisit with a
-	// single JOIN + aggregation if the org ever has hundreds of pending documents).
-	for i := range docs {
-		signers, err := r.signersForDoc(ctx, docs[i].ID)
-		if err != nil {
-			return nil, err
-		}
-		docs[i].Signers = signers
-	}
-	return docs, nil
-}
-
-func (r *ESignRepo) signersForDoc(ctx context.Context, docID string) ([]model.ESignSigner, error) {
-	rows, err := r.db.Query(ctx,
-		`SELECT id, document_id, name, role, user_id, signed, signature_data, signed_at
-		 FROM esign_signers WHERE document_id = $1 ORDER BY id`, docID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []model.ESignSigner
-	for rows.Next() {
-		var s model.ESignSigner
-		if err := rows.Scan(&s.ID, &s.DocumentID, &s.Name, &s.Role, &s.UserID,
-			&s.Signed, &s.SignatureData, &s.SignedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, s)
-	}
-	return out, nil
-}
-
-// Create inserts the document plus one signer row per requested name.
-// Runs inside a transaction so a partially-created document never appears.
-func (r *ESignRepo) Create(ctx context.Context, req model.CreateESignDocumentRequest, createdBy string) (*model.ESignDocument, error) {
-	tx, err := r.db.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	id := uuid.New().String()
-	var d model.ESignDocument
-	err = tx.QueryRow(ctx,
-		`INSERT INTO esign_documents (id, name, type, pages, clauses, status, created_by)
-		 VALUES ($1,$2,$3,2,$4,'pending',$5)
-		 RETURNING id, name, type, pages, clauses, status, created_by, created_at`,
-		id, req.Name, req.Type, req.Clauses, createdBy).
-		Scan(&d.ID, &d.Name, &d.Type, &d.Pages, &d.Clauses, &d.Status, &d.CreatedBy, &d.CreatedAt)
-	if err != nil {
-		return nil, fmt.Errorf("create esign document: %w", err)
-	}
-
-	signerNames := req.SignerNames
-	if len(signerNames) == 0 {
-		signerNames = []string{createdBy} // fall back to the creator as sole signer
-	}
-	for _, name := range signerNames {
-		sid := uuid.New().String()
-		if _, err := tx.Exec(ctx,
-			`INSERT INTO esign_signers (id, document_id, name, role, signed)
-			 VALUES ($1,$2,$3,'staff',false)`, sid, id, name); err != nil {
-			return nil, fmt.Errorf("create signer %q: %w", name, err)
-		}
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("commit tx: %w", err)
-	}
-
-	d.Signers, _ = r.signersForDoc(ctx, id)
-	return &d, nil
-}
-
-// Sign marks one signer's row complete with their drawn signature, then
-// flips the parent document to "complete" once every signer has signed.
-func (r *ESignRepo) Sign(ctx context.Context, signerID, signatureData string) error {
-	tx, err := r.db.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback(ctx)
-
-	var docID string
-	err = tx.QueryRow(ctx,
-		`UPDATE esign_signers SET signed = true, signature_data = $1, signed_at = NOW()
-		 WHERE id = $2 RETURNING document_id`, signatureData, signerID).Scan(&docID)
-	if err != nil {
-		if err == pgx.ErrNoRows {
-			return fmt.Errorf("signer not found")
-		}
-		return fmt.Errorf("sign document: %w", err)
-	}
-
-	var remaining int
-	if err := tx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM esign_signers WHERE document_id = $1 AND signed = false`, docID).
-		Scan(&remaining); err != nil {
-		return err
-	}
-	if remaining == 0 {
-		if _, err := tx.Exec(ctx,
-			`UPDATE esign_documents SET status = 'complete' WHERE id = $1`, docID); err != nil {
-			return err
-		}
-	}
-
-	return tx.Commit(ctx)
 }

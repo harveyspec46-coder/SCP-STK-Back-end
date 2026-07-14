@@ -13,8 +13,10 @@ import (
 	"github.com/scp-stk/hub/internal/config"
 	"github.com/scp-stk/hub/internal/db"
 	"github.com/scp-stk/hub/internal/handler"
+	"github.com/scp-stk/hub/internal/ilovepdf"
 	"github.com/scp-stk/hub/internal/repository"
 	"github.com/scp-stk/hub/internal/router"
+	"github.com/scp-stk/hub/internal/storage"
 )
 
 func main() {
@@ -47,7 +49,10 @@ func main() {
 	workshopRepo := repository.NewWorkshopRepo(pool)
 	shiftRepo := repository.NewShiftRepo(pool)
 	auditRepo := repository.NewAuditRepo(pool)
-	esignRepo := repository.NewESignRepo(pool)
+
+	ilovepdfClient := ilovepdf.NewClient(cfg.ILovePDFPublicKey, cfg.ILovePDFSecretKey)
+	esignStorage := storage.NewClient(cfg.SupabaseURL, cfg.SupabaseServiceKey, cfg.ESignStorageBucket)
+	esignRepo := repository.NewESignRepo(pool, ilovepdfClient, esignStorage)
 
 	// ── Handlers ─────────────────────────────────────────────────────────────
 	handlers := router.Handlers{
@@ -58,16 +63,16 @@ func main() {
 		Voting:        handler.NewVotingHandler(voteRepo, notifRepo),
 		Notifications: handler.NewNotificationHandler(notifRepo),
 
-		Admin:        handler.NewAdminHandler(adminRepo, auditRepo),
+		Admin:         handler.NewAdminHandler(adminRepo, auditRepo),
 		Participants:  handler.NewParticipantHandler(participantRepo, auditRepo),
 		Programs:      handler.NewProgramHandler(programRepo),
 		ProgramLedger: handler.NewProgramLedgerHandler(programLedgerRepo),
-		MOUs:         handler.NewMOUHandler(mouRepo, auditRepo),
-		Resources:    handler.NewResourceHandler(resourceRepo),
-		Workshops:    handler.NewWorkshopHandler(workshopRepo),
-		Shifts:       handler.NewShiftHandler(shiftRepo, auditRepo),
-		Audit:        handler.NewAuditHandler(auditRepo),
-		ESign:        handler.NewESignHandler(esignRepo, auditRepo),
+		MOUs:          handler.NewMOUHandler(mouRepo, auditRepo),
+		Resources:     handler.NewResourceHandler(resourceRepo),
+		Workshops:     handler.NewWorkshopHandler(workshopRepo),
+		Shifts:        handler.NewShiftHandler(shiftRepo, auditRepo),
+		Audit:         handler.NewAuditHandler(auditRepo),
+		ESign:         handler.NewESignHandler(esignRepo, auditRepo),
 	}
 
 	// ── Router ───────────────────────────────────────────────────────────────

@@ -227,35 +227,83 @@ type CreateAuditEntryRequest struct {
 // by RLS in migrations/002 and by the BoardOnly middleware on these routes).
 
 type ESignDocument struct {
-	ID        string        `json:"id"`
-	Name      string        `json:"name"`
-	Type      string        `json:"type"` // participant | mou | staff | grant
-	Pages     int           `json:"pages"`
-	Clauses   []string      `json:"clauses"`
-	Status    string        `json:"status"` // pending | complete
-	CreatedBy string        `json:"created_by,omitempty"`
-	CreatedAt time.Time     `json:"created_at"`
-	Signers   []ESignSigner `json:"signers,omitempty"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Type      string    `json:"type"` // participant | mou | staff | grant
+	Pages     int       `json:"pages"`
+	Clauses   []string  `json:"clauses"`
+	Status    string    `json:"status"` // pending | complete — our own simplified status
+	CreatedBy string    `json:"created_by,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+
+	// Real iLovePDF Signature API fields (added when the mock canvas-sign
+	// flow was replaced with the real API — see migrations/003).
+	SourceFileURL  *string    `json:"source_file_url,omitempty"`
+	SignedFileURL  *string    `json:"signed_file_url,omitempty"`
+	SignatureUUID  *string    `json:"signature_uuid,omitempty"`
+	ILovePDFStatus string     `json:"ilovepdf_status"` // draft | sent | completed | declined | expired | void | deleted
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+
+	// Internal-only identifiers, never serialized to the frontend.
+	// iLovePDF's own docs advise against sharing token_requester outside
+	// your systems, so it's kept server-side and used only for status
+	// checks / download-signed / webhook matching.
+	ILovePDFServer *string `json:"-"`
+	ILovePDFTask   *string `json:"-"`
+	TokenRequester *string `json:"-"`
+
+	Signers []ESignSigner `json:"signers,omitempty"`
 }
 
 type ESignSigner struct {
-	ID            string     `json:"id"`
-	DocumentID    string     `json:"document_id"`
-	Name          string     `json:"name"`
-	Role          string     `json:"role"` // admin | manager | staff | participant | external
-	UserID        *string    `json:"user_id,omitempty"`
-	Signed        bool       `json:"signed"`
-	SignatureData *string    `json:"signature_data,omitempty"` // base64 PNG data URL
-	SignedAt      *time.Time `json:"signed_at,omitempty"`
+	ID         string  `json:"id"`
+	DocumentID string  `json:"document_id"`
+	Name       string  `json:"name"`
+	Email      string  `json:"email"`
+	Role       string  `json:"role"` // admin | manager | staff | participant | external
+	UserID     *string `json:"user_id,omitempty"`
+
+	Signed   bool       `json:"signed"`
+	SignedAt *time.Time `json:"signed_at,omitempty"`
+
+	// SignatureData is legacy — the base64 PNG canvas signature from the old
+	// mock flow. No longer written to; kept only so any already-completed
+	// mock records still round-trip correctly.
+	SignatureData *string `json:"signature_data,omitempty"`
+
+	ILovePDFStatus string  `json:"ilovepdf_status"` // waiting | sent | viewed | signed | declined | error
+	ILovePDFToken  *string `json:"-"`               // per-signer token_requester — internal use only
 }
 
+// CreateESignDocumentRequest creates a document AND kicks off the real
+// iLovePDF signature request in one call: start/sign -> upload -> signature.
+// The PDF itself must already be uploaded to Supabase Storage by the
+// frontend (same pattern as task attachments) — SourceFileURL is that
+// Storage URL, which the backend fetches server-side to forward to iLovePDF.
 type CreateESignDocumentRequest struct {
-	Name        string   `json:"name"`
-	Type        string   `json:"type"`
-	Clauses     []string `json:"clauses"`
-	SignerNames []string `json:"signer_names"` // free-text names or "UID · Name"
+	Name          string               `json:"name"`
+	Type          string               `json:"type"`
+	Clauses       []string             `json:"clauses"`
+	SourceFileURL string               `json:"source_file_url"`
+	Signers       []ESignSignerRequest `json:"signers"`
 }
 
-type SignDocumentRequest struct {
-	SignatureData string `json:"signature_data"`
+type ESignSignerRequest struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Role  string `json:"role,omitempty"` // admin | manager | staff | participant | external — defaults to "external"
+
+	// Elements is optional custom field placement (type/page/position) for
+	// this signer, in iLovePDF's gravity-positioning format. If omitted, a
+	// sensible default (one signature field + one date field, bottom of the
+	// last page) is applied — see repository.ESignRepo.defaultElements.
+	Elements []ESignElement `json:"elements,omitempty"`
+}
+
+type ESignElement struct {
+	Type     string `json:"type"`     // signature | initials | name | date | text
+	Pages    string `json:"pages"`    // "1", "-1" (last page), "3-5", etc.
+	Position string `json:"position"` // gravity positioning, e.g. "bottom center"
+	Content  string `json:"content,omitempty"`
+	Size     int    `json:"size,omitempty"`
 }

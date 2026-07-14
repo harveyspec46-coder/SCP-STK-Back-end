@@ -19,6 +19,9 @@ type Config struct {
 	MSClientSecret     string
 	MSTenantID         string
 	MakeWebhookURL     string
+	ILovePDFPublicKey  string
+	ILovePDFSecretKey  string
+	ESignStorageBucket string
 }
 
 func Load() *Config {
@@ -37,6 +40,9 @@ func Load() *Config {
 		MSClientSecret:     getEnv("MS_CLIENT_SECRET", ""),
 		MSTenantID:         getEnv("MS_TENANT_ID", ""),
 		MakeWebhookURL:     getEnv("MAKE_WEBHOOK_URL", ""),
+		ILovePDFPublicKey:  mustEnv("ILOVEPDF_PUBLIC_KEY"),
+		ILovePDFSecretKey:  mustEnv("ILOVEPDF_SECRET_KEY"),
+		ESignStorageBucket: getEnv("ESIGN_STORAGE_BUCKET", "esign-documents"),
 	}
 }
 

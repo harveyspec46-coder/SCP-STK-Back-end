@@ -168,7 +168,6 @@ func (h *ProgramHandler) CreateDocument(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, model.Response{Data: doc})
 }
 
-
 type ProgramLedgerHandler struct {
 	repo *repository.ProgramLedgerRepo
 }
@@ -526,67 +525,4 @@ func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, model.Response{Data: entries, Total: len(entries)})
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-// E-Signatures — board only (admin + manager); never exposed to staff
-// ════════════════════════════════════════════════════════════════════════════
-
-type ESignHandler struct {
-	repo  *repository.ESignRepo
-	audit *repository.AuditRepo
-}
-
-func NewESignHandler(repo *repository.ESignRepo, audit *repository.AuditRepo) *ESignHandler {
-	return &ESignHandler{repo: repo, audit: audit}
-}
-
-// GET /api/esign/documents
-func (h *ESignHandler) List(w http.ResponseWriter, r *http.Request) {
-	docs, err := h.repo.List(r.Context())
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to list documents")
-		return
-	}
-	writeJSON(w, http.StatusOK, model.Response{Data: docs, Total: len(docs)})
-}
-
-// POST /api/esign/documents
-func (h *ESignHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var req model.CreateESignDocumentRequest
-	if err := decode(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-	if req.Name == "" {
-		writeError(w, http.StatusBadRequest, "name is required")
-		return
-	}
-	user := auth.GetUser(r.Context())
-	doc, err := h.repo.Create(r.Context(), req, user.ID)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to create document")
-		return
-	}
-	writeJSON(w, http.StatusCreated, model.Response{Data: doc})
-}
-
-// POST /api/esign/signers/{signerId}/sign
-// Body: { "signature_data": "data:image/png;base64,..." } from the drawn canvas.
-// Flips the parent document to "complete" once every signer has signed.
-func (h *ESignHandler) Sign(w http.ResponseWriter, r *http.Request) {
-	signerID := chi.URLParam(r, "signerId")
-	var req model.SignDocumentRequest
-	if err := decode(r, &req); err != nil || req.SignatureData == "" {
-		writeError(w, http.StatusBadRequest, "signature_data is required")
-		return
-	}
-	if err := h.repo.Sign(r.Context(), signerID, req.SignatureData); err != nil {
-		writeError(w, http.StatusInternalServerError, "failed to record signature")
-		return
-	}
-	user := auth.GetUser(r.Context())
-	_ = h.audit.Record(r.Context(), user.ID, "document_signed", "E-Signatures",
-		"Signed document via signer "+signerID, r.RemoteAddr)
-	writeJSON(w, http.StatusOK, model.Response{Message: "signature recorded"})
 }

@@ -22,16 +22,16 @@ type Handlers struct {
 	// Added alongside admin auto-recognition, participants/volunteers,
 	// MOUs, resources, workshops, shift scheduling, the audit log, and
 	// in-app e-signatures.
-	Admin        *handler.AdminHandler
+	Admin         *handler.AdminHandler
 	Participants  *handler.ParticipantHandler
 	Programs      *handler.ProgramHandler
 	ProgramLedger *handler.ProgramLedgerHandler
-	MOUs         *handler.MOUHandler
-	Resources    *handler.ResourceHandler
-	Workshops    *handler.WorkshopHandler
-	Shifts       *handler.ShiftHandler
-	Audit        *handler.AuditHandler
-	ESign        *handler.ESignHandler
+	MOUs          *handler.MOUHandler
+	Resources     *handler.ResourceHandler
+	Workshops     *handler.WorkshopHandler
+	Shifts        *handler.ShiftHandler
+	Audit         *handler.AuditHandler
+	ESign         *handler.ESignHandler
 }
 
 func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) http.Handler {
@@ -56,6 +56,12 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok","service":"scp-stk-hub"}`))
 	})
+
+	// ── iLovePDF signature webhook (public) ──────────────────────────────────
+	// iLovePDF calls this directly — no Supabase JWT is or can be attached,
+	// since it's a server-to-server callback, not a user request. Must match
+	// the URL registered in the iloveapi.com dashboard's Webhooks section.
+	r.Post("/webhooks/ilovepdf", h.ESign.Webhook)
 
 	// ── Protected API routes ─────────────────────────────────────────────────
 	r.Route("/api", func(r chi.Router) {
@@ -161,16 +167,16 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 			r.Post("/", h.Participants.Create)
 			r.Patch("/{id}/stage", h.Participants.AdvanceStage)
 		})
-				// ── Programs & Documents — board (admin + manager) ────────────────────
-				r.Route("/programs", func(r chi.Router) {
-					r.Use(auth.RequireRole("manager"))
-					r.Get("/", h.Programs.List)
-					r.Post("/", h.Programs.Create)
-					r.Get("/{id}/documents", h.Programs.ListDocuments)
-					r.Post("/{id}/documents", h.Programs.CreateDocument)
-					r.Get("/{id}/ledger", h.ProgramLedger.List)
-				})
-				r.Post("/program-ledger", h.ProgramLedger.Create)
+		// ── Programs & Documents — board (admin + manager) ────────────────────
+		r.Route("/programs", func(r chi.Router) {
+			r.Use(auth.RequireRole("manager"))
+			r.Get("/", h.Programs.List)
+			r.Post("/", h.Programs.Create)
+			r.Get("/{id}/documents", h.Programs.ListDocuments)
+			r.Post("/{id}/documents", h.Programs.CreateDocument)
+			r.Get("/{id}/ledger", h.ProgramLedger.List)
+		})
+		r.Post("/program-ledger", h.ProgramLedger.Create)
 
 		// ── MOUs & Contracts — board ───────────────────────────────────────────
 		r.Route("/mous", func(r chi.Router) {
@@ -211,7 +217,6 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 			r.Use(auth.RequireRole("manager"))
 			r.Get("/documents", h.ESign.List)
 			r.Post("/documents", h.ESign.Create)
-			r.Post("/signers/{signerId}/sign", h.ESign.Sign)
 		})
 
 		// ── Admin — allowlist + Users & IDs panel — admin only ───────────────
