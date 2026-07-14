@@ -54,6 +54,7 @@ func main() {
 	esignStorage := storage.NewClient(cfg.SupabaseURL, cfg.SupabaseServiceKey, cfg.ESignStorageBucket)
 	esignRepo := repository.NewESignRepo(pool, ilovepdfClient, esignStorage)
 
+	sigRepo := repository.NewSignatureRepo(pool)
 	// ── Handlers ─────────────────────────────────────────────────────────────
 	handlers := router.Handlers{
 		CRM:           handler.NewCRMHandler(crmRepo, taskRepo, notifRepo),
@@ -72,7 +73,7 @@ func main() {
 		Workshops:     handler.NewWorkshopHandler(workshopRepo),
 		Shifts:        handler.NewShiftHandler(shiftRepo, auditRepo),
 		Audit:         handler.NewAuditHandler(auditRepo),
-		ESign:         handler.NewESignHandler(esignRepo, auditRepo),
+		ESign:         handler.NewESignHandler(esignRepo, sigRepo, auditRepo),
 	}
 
 	// ── Router ───────────────────────────────────────────────────────────────

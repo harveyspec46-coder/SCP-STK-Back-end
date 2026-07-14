@@ -19,12 +19,13 @@ import (
 // ════════════════════════════════════════════════════════════════════════════
 
 type ESignHandler struct {
-	repo  *repository.ESignRepo
-	audit *repository.AuditRepo
+	repo    *repository.ESignRepo
+	sigRepo *repository.SignatureRepo
+	audit   *repository.AuditRepo
 }
 
-func NewESignHandler(repo *repository.ESignRepo, audit *repository.AuditRepo) *ESignHandler {
-	return &ESignHandler{repo: repo, audit: audit}
+func NewESignHandler(repo *repository.ESignRepo, sigRepo *repository.SignatureRepo, audit *repository.AuditRepo) *ESignHandler {
+	return &ESignHandler{repo: repo, sigRepo: sigRepo, audit: audit}
 }
 
 // GET /api/esign/documents
@@ -79,6 +80,49 @@ func (h *ESignHandler) Create(w http.ResponseWriter, r *http.Request) {
 	_ = h.audit.Record(r.Context(), user.ID, "esign_request_created", "E-Signatures",
 		"Created signature request: "+doc.Name, r.RemoteAddr)
 	writeJSON(w, http.StatusCreated, model.Response{Data: doc})
+}
+
+// GET /api/esign/my-signature
+// Returns the caller's saved signature, or data: null if not set up yet.
+func (h *ESignHandler) GetMySignature(w http.ResponseWriter, r *http.Request) {
+	user := auth.GetUser(r.Context())
+	sig, err := h.sigRepo.GetMine(r.Context(), user.ID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to load signature")
+		return
+	}
+	writeJSON(w, http.StatusOK, model.Response{Data: sig})
+}
+
+// POST /api/esign/my-signature
+// Body: { full_name, font_style, signature_image }
+// Creates or overwrites the caller's saved signature.
+func (h *ESignHandler) SaveMySignature(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FullName       string `json:"full_name"`
+		FontStyle      string `json:"font_style"`
+		SignatureImage string `json:"signature_image"`
+	}
+	if err := decode(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.FullName == "" || req.FontStyle == "" || req.SignatureImage == "" {
+		writeError(w, http.StatusBadRequest, "full_name, font_style, and signature_image are required")
+		return
+	}
+
+	user := auth.GetUser(r.Context())
+	sig, err := h.sigRepo.SaveMine(r.Context(), user.ID, req.FullName, req.FontStyle, req.SignatureImage)
+	if err != nil {
+		log.Printf("save my-signature failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to save signature")
+		return
+	}
+
+	_ = h.audit.Record(r.Context(), user.ID, "esign_signature_saved", "E-Signatures",
+		"Set up personal signature", r.RemoteAddr)
+	writeJSON(w, http.StatusOK, model.Response{Data: sig})
 }
 
 // POST /webhooks/ilovepdf — PUBLIC, no Supabase auth. Must be registered as

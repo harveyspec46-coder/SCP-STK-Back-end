@@ -217,6 +217,8 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 			r.Use(auth.RequireRole("manager"))
 			r.Get("/documents", h.ESign.List)
 			r.Post("/documents", h.ESign.Create)
+		r.Get("/my-signature", h.ESign.GetMySignature)
+		r.Post("/my-signature", h.ESign.SaveMySignature)
 		})
 
 		// ── Admin — allowlist + Users & IDs panel — admin only ───────────────
