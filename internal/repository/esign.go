@@ -152,67 +152,17 @@ func filenameFromURL(url string) string {
 	return name
 }
 
-// Create fetches the already-uploaded source PDF, runs the full iLovePDF
-// start -> upload -> create-signature flow (which emails every signer),
-// then persists the document + signer rows with their iLovePDF tokens.
-//
-// All external calls happen before any DB write, so a failure partway
-// through (e.g. iLovePDF create-signature rejects a bad email) never leaves
-// a half-created document behind — the orphaned iLovePDF task simply expires
-// on their side after 2 hours per their own task-lifetime policy.
+// Create saves the document + signers directly to the database. Signing
+// happens entirely in-app (drag a saved signature onto a pre-placed field —
+// see esign_fields.go), so there is no external iLovePDF call here; this
+// method used to run the full iLovePDF start/sign -> upload -> create-
+// signature flow, which was dropped when the project moved off it.
 func (r *ESignRepo) Create(ctx context.Context, req model.CreateESignDocumentRequest, createdBy string) (*model.ESignDocument, error) {
 	if req.SourceFileURL == "" {
 		return nil, fmt.Errorf("source_file_url is required")
 	}
 	if len(req.Signers) == 0 {
 		return nil, fmt.Errorf("at least one signer is required")
-	}
-
-	pdfBytes, err := storage.FetchFile(ctx, r.ilovepdf.HTTP, req.SourceFileURL)
-	if err != nil {
-		return nil, fmt.Errorf("fetch source pdf: %w", err)
-	}
-	filename := filenameFromURL(req.SourceFileURL)
-
-	server, task, err := r.ilovepdf.StartSign(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("start ilovepdf sign task: %w", err)
-	}
-
-	serverFilename, err := r.ilovepdf.Upload(ctx, server, task, filename, pdfBytes)
-	if err != nil {
-		return nil, fmt.Errorf("upload pdf to ilovepdf: %w", err)
-	}
-
-	ilpSigners := make([]ilovepdf.Signer, 0, len(req.Signers))
-	for _, s := range req.Signers {
-		elements := s.Elements
-		if len(elements) == 0 {
-			elements = defaultElements()
-		}
-		ilpSigners = append(ilpSigners, ilovepdf.Signer{
-			Name:  s.Name,
-			Email: s.Email,
-			Type:  "signer",
-			Files: []ilovepdf.SignerFile{
-				{ServerFilename: serverFilename, Elements: toILovePDFElements(elements)},
-			},
-		})
-	}
-
-	sigResp, err := r.ilovepdf.CreateSignature(ctx, server, task,
-		[]ilovepdf.FileEntry{{ServerFilename: serverFilename, Filename: filename}}, ilpSigners)
-	if err != nil {
-		return nil, fmt.Errorf("create ilovepdf signature request: %w", err)
-	}
-
-	// Match returned per-signer tokens back to our request by email, since
-	// iLovePDF's response order isn't documented as guaranteed to match ours.
-	tokenByEmail := make(map[string]string, len(sigResp.Signers))
-	statusByEmail := make(map[string]string, len(sigResp.Signers))
-	for _, s := range sigResp.Signers {
-		tokenByEmail[strings.ToLower(s.Email)] = s.TokenRequester
-		statusByEmail[strings.ToLower(s.Email)] = s.Status
 	}
 
 	tx, err := r.db.Begin(ctx)
@@ -224,15 +174,12 @@ func (r *ESignRepo) Create(ctx context.Context, req model.CreateESignDocumentReq
 	id := uuid.New().String()
 	var d model.ESignDocument
 	err = tx.QueryRow(ctx,
-		`INSERT INTO esign_documents
-		   (id, name, type, pages, clauses, status, created_by, source_file_url,
-		    ilovepdf_server, ilovepdf_task, token_requester, signature_uuid, ilovepdf_status)
-		 VALUES ($1,$2,$3,1,$4,'pending',$5,$6,$7,$8,$9,$10,$11)
+		`INSERT INTO esign_documents (id, name, type, pages, clauses, status, created_by, source_file_url)
+		 VALUES ($1,$2,$3,1,$4,'pending',$5,$6)
 		 RETURNING id, name, type, pages, clauses, status, created_by, created_at,
 		           source_file_url, signed_file_url, ilovepdf_server, ilovepdf_task,
 		           token_requester, signature_uuid, ilovepdf_status, completed_at`,
-		id, req.Name, req.Type, req.Clauses, createdBy, req.SourceFileURL,
-		server, task, sigResp.TokenRequester, sigResp.UUID, sigResp.Status).
+		id, req.Name, req.Type, req.Clauses, createdBy, req.SourceFileURL).
 		Scan(&d.ID, &d.Name, &d.Type, &d.Pages, &d.Clauses, &d.Status, &d.CreatedBy, &d.CreatedAt,
 			&d.SourceFileURL, &d.SignedFileURL, &d.ILovePDFServer, &d.ILovePDFTask,
 			&d.TokenRequester, &d.SignatureUUID, &d.ILovePDFStatus, &d.CompletedAt)
@@ -246,15 +193,10 @@ func (r *ESignRepo) Create(ctx context.Context, req model.CreateESignDocumentReq
 			role = "external"
 		}
 		sid := uuid.New().String()
-		token := tokenByEmail[strings.ToLower(s.Email)]
-		status := statusByEmail[strings.ToLower(s.Email)]
-		if status == "" {
-			status = "waiting"
-		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO esign_signers (id, document_id, name, email, role, signed, ilovepdf_status, ilovepdf_token_requester)
-			 VALUES ($1,$2,$3,$4,$5,false,$6,$7)`,
-			sid, id, s.Name, s.Email, role, status, token); err != nil {
+			`INSERT INTO esign_signers (id, document_id, name, email, role, signed)
+			 VALUES ($1,$2,$3,$4,$5,false)`,
+			sid, id, s.Name, s.Email, role); err != nil {
 			return nil, fmt.Errorf("create signer %q: %w", s.Email, err)
 		}
 	}
