@@ -32,6 +32,7 @@ type Handlers struct {
 	Shifts        *handler.ShiftHandler
 	Audit         *handler.AuditHandler
 	ESign         *handler.ESignHandler
+	ESignFields   *handler.ESignFieldsHandler
 }
 
 func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) http.Handler {
@@ -217,6 +218,9 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 			r.Use(auth.RequireRole("manager"))
 			r.Get("/documents", h.ESign.List)
 			r.Post("/documents", h.ESign.Create)
+		r.Get("/documents/{id}/fields", h.ESignFields.List)
+		r.Post("/documents/{id}/fields", h.ESignFields.Create)
+		r.Patch("/fields/{id}", h.ESignFields.Fill)
 		r.Get("/my-signature", h.ESign.GetMySignature)
 		r.Post("/my-signature", h.ESign.SaveMySignature)
 		})

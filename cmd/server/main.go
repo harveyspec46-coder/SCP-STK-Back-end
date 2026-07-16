@@ -55,6 +55,7 @@ func main() {
 	esignRepo := repository.NewESignRepo(pool, ilovepdfClient, esignStorage)
 
 	sigRepo := repository.NewSignatureRepo(pool)
+	esignFieldsRepo := repository.NewESignFieldsRepo(pool)
 	// ── Handlers ─────────────────────────────────────────────────────────────
 	handlers := router.Handlers{
 		CRM:           handler.NewCRMHandler(crmRepo, taskRepo, notifRepo),
@@ -74,6 +75,7 @@ func main() {
 		Shifts:        handler.NewShiftHandler(shiftRepo, auditRepo),
 		Audit:         handler.NewAuditHandler(auditRepo),
 		ESign:         handler.NewESignHandler(esignRepo, sigRepo, auditRepo),
+		ESignFields:   handler.NewESignFieldsHandler(esignFieldsRepo, esignRepo, auditRepo),
 	}
 
 	// ── Router ───────────────────────────────────────────────────────────────

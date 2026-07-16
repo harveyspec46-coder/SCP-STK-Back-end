@@ -288,6 +288,43 @@ func (r *ESignRepo) HandleSignerEvent(ctx context.Context, signerTokenRequester,
 	return nil
 }
 
+// MarkSignerComplete flips one signer's signed flag once all of their
+// esign_fields are filled, then checks whether every signer on the document
+// is now done — if so, flips the document itself to complete.
+func (r *ESignRepo) MarkSignerComplete(ctx context.Context, documentID, signerID string) error {
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE esign_signers SET signed = true, signed_at = NOW() WHERE id = $1`,
+		signerID); err != nil {
+		return fmt.Errorf("mark signer signed: %w", err)
+	}
+
+	var remaining int
+	if err := tx.QueryRow(ctx,
+		`SELECT COUNT(*) FROM esign_signers WHERE document_id = $1 AND signed = false`,
+		documentID).Scan(&remaining); err != nil {
+		return fmt.Errorf("count remaining signers: %w", err)
+	}
+
+	if remaining == 0 {
+		if _, err := tx.Exec(ctx,
+			`UPDATE esign_documents SET status = 'complete', completed_at = NOW() WHERE id = $1`,
+			documentID); err != nil {
+			return fmt.Errorf("mark document complete: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	return nil
+}
+
 // UpdateDocumentStatus mirrors iLovePDF's own status (sent/declined/expired/
 // void/etc.) onto our row without touching the simplified pending/complete
 // status column — that one only flips via HandleCompletion.
