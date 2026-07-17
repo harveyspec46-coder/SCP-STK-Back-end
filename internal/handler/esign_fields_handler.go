@@ -26,6 +26,7 @@ func (h *ESignFieldsHandler) List(w http.ResponseWriter, r *http.Request) {
 	docID := chi.URLParam(r, "id")
 	fields, err := h.fields.ListForDocument(r.Context(), docID)
 	if err != nil {
+		log.Printf("esign fields list failed: %v", err)
 		writeError(w, http.StatusInternalServerError, "failed to list fields")
 		return
 	}
