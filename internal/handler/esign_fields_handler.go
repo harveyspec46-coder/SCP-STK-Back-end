@@ -70,6 +70,36 @@ func (h *ESignFieldsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, model.Response{Data: saved, Total: len(saved)})
 }
 
+// POST /api/esign/documents/{id}/signers/{signerId}/finalize
+// Idempotent: checks whether every field belonging to this signer on this
+// document is filled, and if so marks the signer (and possibly the whole
+// document) complete. Safe to call even if already complete, or if fields
+// were filled in an earlier session — this is the only place that
+// guarantees completion status gets corrected regardless of how the fields
+// ended up filled.
+func (h *ESignFieldsHandler) Finalize(w http.ResponseWriter, r *http.Request) {
+	docID := chi.URLParam(r, "id")
+	signerID := chi.URLParam(r, "signerId")
+
+	allDone, err := h.fields.AllFilledForSigner(r.Context(), docID, signerID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check field completion")
+		return
+	}
+	if !allDone {
+		writeJSON(w, http.StatusOK, model.Response{Message: "not all fields filled yet", Data: map[string]bool{"complete": false}})
+		return
+	}
+
+	if err := h.signers.MarkSignerComplete(r.Context(), docID, signerID); err != nil {
+		log.Printf("esign fields finalize: failed to mark signer complete: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to finalize signer")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, model.Response{Message: "signer finalized", Data: map[string]bool{"complete": true}})
+}
+
 // PATCH /api/esign/fields/{id}
 // Body: { signer_id, value }
 // value is either the signer's saved signature image (data URL) or the

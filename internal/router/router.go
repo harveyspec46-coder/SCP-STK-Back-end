@@ -221,6 +221,7 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 		r.Get("/documents/{id}/fields", h.ESignFields.List)
 		r.Post("/documents/{id}/fields", h.ESignFields.Create)
 		r.Patch("/fields/{id}", h.ESignFields.Fill)
+		r.Post("/documents/{id}/signers/{signerId}/finalize", h.ESignFields.Finalize)
 		r.Get("/my-signature", h.ESign.GetMySignature)
 		r.Post("/my-signature", h.ESign.SaveMySignature)
 		})
