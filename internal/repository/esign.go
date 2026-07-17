@@ -193,10 +193,14 @@ func (r *ESignRepo) Create(ctx context.Context, req model.CreateESignDocumentReq
 			role = "external"
 		}
 		sid := uuid.New().String()
+		var userID interface{}
+		if s.UserID != "" {
+			userID = s.UserID
+		}
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO esign_signers (id, document_id, name, email, role, signed)
-			 VALUES ($1,$2,$3,$4,$5,false)`,
-			sid, id, s.Name, s.Email, role); err != nil {
+			`INSERT INTO esign_signers (id, document_id, name, email, role, user_id, signed)
+			 VALUES ($1,$2,$3,$4,$5,$6,false)`,
+			sid, id, s.Name, s.Email, role, userID); err != nil {
 			return nil, fmt.Errorf("create signer %q: %w", s.Email, err)
 		}
 	}

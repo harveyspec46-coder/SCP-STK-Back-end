@@ -289,9 +289,10 @@ type CreateESignDocumentRequest struct {
 }
 
 type ESignSignerRequest struct {
-	Name  string `json:"name"`
-	Email string `json:"email"`
-	Role  string `json:"role,omitempty"` // admin | manager | staff | participant | external — defaults to "external"
+	Name   string `json:"name"`
+	Email  string `json:"email"`
+	Role   string `json:"role,omitempty"` // admin | manager | staff | participant | external — defaults to "external"
+	UserID string `json:"user_id,omitempty"` // links this signer row back to their actual login, for "is this my turn" matching
 
 	// Elements is optional custom field placement (type/page/position) for
 	// this signer, in iLovePDF's gravity-positioning format. If omitted, a
