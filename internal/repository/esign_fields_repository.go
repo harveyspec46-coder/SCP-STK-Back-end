@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -27,7 +28,7 @@ type ESignField struct {
 	Height      float64 `json:"height"`
 	Filled      bool    `json:"filled"`
 	FilledValue *string `json:"filled_value"`
-	FilledAt    *string `json:"filled_at"`
+	FilledAt    *time.Time `json:"filled_at"`
 }
 
 type FieldInput struct {
