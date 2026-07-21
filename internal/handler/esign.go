@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/scp-stk/hub/internal/auth"
 	"github.com/scp-stk/hub/internal/ilovepdf"
 	"github.com/scp-stk/hub/internal/model"
@@ -80,6 +82,28 @@ func (h *ESignHandler) Create(w http.ResponseWriter, r *http.Request) {
 	_ = h.audit.Record(r.Context(), user.ID, "esign_request_created", "E-Signatures",
 		"Created signature request: "+doc.Name, r.RemoteAddr)
 	writeJSON(w, http.StatusCreated, model.Response{Data: doc})
+}
+
+// DELETE /api/esign/documents/{id}
+// Only the document's creator can delete it.
+func (h *ESignHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	docID := chi.URLParam(r, "id")
+	user := auth.GetUser(r.Context())
+
+	err := h.repo.Delete(r.Context(), docID, user.ID)
+	if err != nil {
+		if err == repository.ErrNotDocumentOwner {
+			writeError(w, http.StatusForbidden, "only the document's creator can delete it")
+			return
+		}
+		log.Printf("esign delete failed: %v", err)
+		writeError(w, http.StatusInternalServerError, "failed to delete document")
+		return
+	}
+
+	_ = h.audit.Record(r.Context(), user.ID, "esign_document_deleted", "E-Signatures",
+		"Deleted document "+docID, r.RemoteAddr)
+	writeJSON(w, http.StatusOK, model.Response{Message: "document deleted"})
 }
 
 // GET /api/esign/my-signature

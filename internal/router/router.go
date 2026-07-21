@@ -218,6 +218,7 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 			r.Use(auth.RequireRole("manager"))
 			r.Get("/documents", h.ESign.List)
 			r.Post("/documents", h.ESign.Create)
+		r.Delete("/documents/{id}", h.ESign.Delete)
 		r.Get("/documents/{id}/fields", h.ESignFields.List)
 		r.Post("/documents/{id}/fields", h.ESignFields.Create)
 		r.Patch("/fields/{id}", h.ESignFields.Fill)

@@ -213,6 +213,31 @@ func (r *ESignRepo) Create(ctx context.Context, req model.CreateESignDocumentReq
 	return &d, nil
 }
 
+// Delete removes a document (and, via ON DELETE CASCADE, its signers and
+// fields) -- but only if requestedBy matches the document's created_by.
+// Returns a sentinel error the handler checks for to return 403 vs 500.
+var ErrNotDocumentOwner = fmt.Errorf("only the document's creator can delete it")
+
+func (r *ESignRepo) Delete(ctx context.Context, documentID, requestedBy string) error {
+	var createdBy string
+	err := r.db.QueryRow(ctx,
+		`SELECT created_by FROM esign_documents WHERE id = $1`, documentID).Scan(&createdBy)
+	if err != nil {
+		if err == pgx.ErrNoRows {
+			return fmt.Errorf("document not found")
+		}
+		return fmt.Errorf("lookup document owner: %w", err)
+	}
+	if createdBy != requestedBy {
+		return ErrNotDocumentOwner
+	}
+
+	if _, err := r.db.Exec(ctx, `DELETE FROM esign_documents WHERE id = $1`, documentID); err != nil {
+		return fmt.Errorf("delete document: %w", err)
+	}
+	return nil
+}
+
 // HandleSignerEvent updates one signer's status from a webhook event
 // (signature.signer.completed, or any other per-signer status change).
 // When the event marks the signer as "signed", signed/signed_at are set too.
