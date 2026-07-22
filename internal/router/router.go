@@ -33,6 +33,7 @@ type Handlers struct {
 	Audit         *handler.AuditHandler
 	ESign         *handler.ESignHandler
 	ESignFields   *handler.ESignFieldsHandler
+	Committees    *handler.CommitteeHandler
 }
 
 func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) http.Handler {
@@ -225,6 +226,17 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 		r.Post("/documents/{id}/signers/{signerId}/finalize", h.ESignFields.Finalize)
 		r.Get("/my-signature", h.ESign.GetMySignature)
 		r.Post("/my-signature", h.ESign.SaveMySignature)
+		})
+
+		// -- Committees -- board can view, admin manages --
+		r.Route("/committees", func(r chi.Router) {
+			r.Use(auth.RequireRole("manager"))
+			r.Get("/", h.Committees.List)
+			r.With(auth.RequireExactRole("admin")).Post("/", h.Committees.Create)
+			r.With(auth.RequireExactRole("admin")).Delete("/{id}", h.Committees.Delete)
+			r.With(auth.RequireExactRole("admin")).Post("/{id}/members", h.Committees.AddMember)
+			r.With(auth.RequireExactRole("admin")).Patch("/{id}/members/{memberId}", h.Committees.UpdateMemberRole)
+			r.With(auth.RequireExactRole("admin")).Delete("/{id}/members/{memberId}", h.Committees.RemoveMember)
 		})
 
 		// ── Admin — allowlist + Users & IDs panel — admin only ───────────────

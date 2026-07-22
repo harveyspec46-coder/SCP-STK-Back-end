@@ -56,6 +56,7 @@ func main() {
 
 	sigRepo := repository.NewSignatureRepo(pool)
 	esignFieldsRepo := repository.NewESignFieldsRepo(pool)
+	committeeRepo := repository.NewCommitteeRepo(pool)
 	// ── Handlers ─────────────────────────────────────────────────────────────
 	handlers := router.Handlers{
 		CRM:           handler.NewCRMHandler(crmRepo, taskRepo, notifRepo),
@@ -76,6 +77,7 @@ func main() {
 		Audit:         handler.NewAuditHandler(auditRepo),
 		ESign:         handler.NewESignHandler(esignRepo, sigRepo, auditRepo),
 		ESignFields:   handler.NewESignFieldsHandler(esignFieldsRepo, esignRepo, auditRepo),
+		Committees:    handler.NewCommitteeHandler(committeeRepo, auditRepo),
 	}
 
 	// ── Router ───────────────────────────────────────────────────────────────
