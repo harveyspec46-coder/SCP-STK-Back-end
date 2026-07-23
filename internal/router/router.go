@@ -34,6 +34,7 @@ type Handlers struct {
 	ESign         *handler.ESignHandler
 	ESignFields   *handler.ESignFieldsHandler
 	Committees    *handler.CommitteeHandler
+	CommitteeDocuments *handler.CommitteeDocumentHandler
 }
 
 func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) http.Handler {
@@ -237,6 +238,9 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 			r.With(auth.RequireExactRole("admin")).Post("/{id}/members", h.Committees.AddMember)
 			r.With(auth.RequireExactRole("admin")).Patch("/{id}/members/{memberId}", h.Committees.UpdateMemberRole)
 			r.With(auth.RequireExactRole("admin")).Delete("/{id}/members/{memberId}", h.Committees.RemoveMember)
+			r.Get("/{id}/documents", h.CommitteeDocuments.List)
+			r.Post("/{id}/documents", h.CommitteeDocuments.Add)
+			r.Delete("/{id}/documents/{docId}", h.CommitteeDocuments.Delete)
 		})
 
 		// ── Admin — allowlist + Users & IDs panel — admin only ───────────────
