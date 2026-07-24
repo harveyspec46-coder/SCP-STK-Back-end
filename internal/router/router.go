@@ -35,6 +35,7 @@ type Handlers struct {
 	ESignFields   *handler.ESignFieldsHandler
 	Committees    *handler.CommitteeHandler
 	CommitteeDocuments *handler.CommitteeDocumentHandler
+	CommitteeMessages  *handler.CommitteeMessageHandler
 }
 
 func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) http.Handler {
@@ -241,6 +242,8 @@ func New(jwtSecret string, pool *pgxpool.Pool, h Handlers, supabaseURL string) h
 			r.Get("/{id}/documents", h.CommitteeDocuments.List)
 			r.Post("/{id}/documents", h.CommitteeDocuments.Add)
 			r.Delete("/{id}/documents/{docId}", h.CommitteeDocuments.Delete)
+			r.Get("/{id}/messages", h.CommitteeMessages.List)
+			r.Post("/{id}/messages", h.CommitteeMessages.Send)
 		})
 
 		// ── Admin — allowlist + Users & IDs panel — admin only ───────────────
